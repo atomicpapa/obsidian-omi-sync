@@ -43,7 +43,21 @@ var DEFAULT_SETTINGS = {
   actionItemTags: "omi, omi/action-item",
   actionItemCompletedTags: "completed, done",
   actionItemPendingTags: "todo, pending",
-  includeCategoryTag: true
+  includeCategoryTag: true,
+  // Incremental sync defaults
+  enableIncrementalSync: true,
+  lastMemorySyncTime: "",
+  lastConversationSyncTime: "",
+  lastActionItemSyncTime: "",
+  // Daily note defaults
+  enableDailyNoteIntegration: false,
+  dailyNoteFolder: "",
+  dailyNoteFormat: "YYYY-MM-DD",
+  dailyNoteSectionHeader: "## Omi Summary",
+  dailyNoteIncludeMemories: true,
+  dailyNoteIncludeConversations: true,
+  dailyNoteIncludeActionItems: true,
+  dailyNotePosition: "append"
 };
 var OmiSyncPlugin = class extends import_obsidian.Plugin {
   constructor() {
@@ -60,6 +74,13 @@ var OmiSyncPlugin = class extends import_obsidian.Plugin {
       name: "Sync all Omi data",
       callback: async () => {
         await this.syncAll();
+      }
+    });
+    this.addCommand({
+      id: "sync-all-omi-full",
+      name: "Sync all Omi data (full sync, ignore last sync time)",
+      callback: async () => {
+        await this.syncAll(false, true);
       }
     });
     this.addCommand({
@@ -81,6 +102,13 @@ var OmiSyncPlugin = class extends import_obsidian.Plugin {
       name: "Sync Omi action items only",
       callback: async () => {
         await this.syncActionItems();
+      }
+    });
+    this.addCommand({
+      id: "sync-omi-to-daily-note",
+      name: "Sync today's Omi data to daily note",
+      callback: async () => {
+        await this.syncToDailyNote();
       }
     });
     this.addSettingTab(new OmiSyncSettingTab(this.app, this));
@@ -158,19 +186,27 @@ var OmiSyncPlugin = class extends import_obsidian.Plugin {
     });
     return memories || [];
   }
-  async fetchConversations(limit = 100, offset = 0) {
-    const conversations = await this.apiRequest("/user/conversations", {
+  async fetchConversations(limit = 100, offset = 0, startDate) {
+    const params = {
       limit: limit.toString(),
       offset: offset.toString(),
       include_transcript: "true"
-    });
+    };
+    if (startDate) {
+      params.start_date = startDate;
+    }
+    const conversations = await this.apiRequest("/user/conversations", params);
     return conversations || [];
   }
-  async fetchActionItems(limit = 100, offset = 0) {
-    const actionItems = await this.apiRequest("/user/action-items", {
+  async fetchActionItems(limit = 100, offset = 0, startDate) {
+    const params = {
       limit: limit.toString(),
       offset: offset.toString()
-    });
+    };
+    if (startDate) {
+      params.start_date = startDate;
+    }
+    const actionItems = await this.apiRequest("/user/action-items", params);
     return actionItems || [];
   }
   // ============================================================================
@@ -182,6 +218,138 @@ var OmiSyncPlugin = class extends import_obsidian.Plugin {
     if (!folder) {
       await this.app.vault.createFolder(normalizedPath);
     }
+  }
+  // ============================================================================
+  // Daily Note Integration
+  // ============================================================================
+  formatDate(date, format) {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, "0");
+    const day = String(date.getDate()).padStart(2, "0");
+    return format.replace("YYYY", String(year)).replace("YY", String(year).slice(-2)).replace("MM", month).replace("M", String(date.getMonth() + 1)).replace("DD", day).replace("D", String(date.getDate()));
+  }
+  getDailyNotePath(date) {
+    const fileName = this.formatDate(date, this.settings.dailyNoteFormat);
+    const folder = this.settings.dailyNoteFolder.trim();
+    if (folder) {
+      return (0, import_obsidian.normalizePath)(`${folder}/${fileName}.md`);
+    }
+    return (0, import_obsidian.normalizePath)(`${fileName}.md`);
+  }
+  async getOrCreateDailyNote(date) {
+    const path = this.getDailyNotePath(date);
+    const existingFile = this.app.vault.getAbstractFileByPath(path);
+    if (existingFile) {
+      return await this.app.vault.read(existingFile);
+    }
+    if (this.settings.dailyNoteFolder.trim()) {
+      await this.ensureFolderExists(this.settings.dailyNoteFolder);
+    }
+    const dateStr = date.toLocaleDateString("en-US", {
+      weekday: "long",
+      year: "numeric",
+      month: "long",
+      day: "numeric"
+    });
+    const initialContent = `# ${dateStr}
+
+`;
+    await this.app.vault.create(path, initialContent);
+    return initialContent;
+  }
+  async updateDailyNote(date, memories, conversations, actionItems) {
+    var _a, _b, _c;
+    if (!this.settings.enableDailyNoteIntegration)
+      return;
+    const dateStr = date.toISOString().split("T")[0];
+    const todaysMemories = memories.filter((m) => {
+      if (!m.created_at)
+        return false;
+      return m.created_at.startsWith(dateStr);
+    });
+    const todaysConversations = conversations.filter((c) => {
+      return c.created_at.startsWith(dateStr);
+    });
+    const todaysActionItems = actionItems.filter((a) => {
+      return a.created_at.startsWith(dateStr);
+    });
+    if (todaysMemories.length === 0 && todaysConversations.length === 0 && todaysActionItems.length === 0) {
+      return;
+    }
+    const path = this.getDailyNotePath(date);
+    let content = await this.getOrCreateDailyNote(date);
+    let omiSection = `
+${this.settings.dailyNoteSectionHeader}
+
+`;
+    if (this.settings.dailyNoteIncludeConversations && todaysConversations.length > 0) {
+      omiSection += `### Conversations (${todaysConversations.length})
+
+`;
+      for (const conv of todaysConversations) {
+        const title = ((_a = conv.structured) == null ? void 0 : _a.title) || "Untitled Conversation";
+        const emoji = ((_b = conv.structured) == null ? void 0 : _b.emoji) || "\u{1F4AC}";
+        const fileName = this.generateFileName(conv, "conversation");
+        omiSection += `- ${emoji} [[${this.settings.conversationsFolder}/${fileName}|${title}]]
+`;
+        if ((_c = conv.structured) == null ? void 0 : _c.overview) {
+          const shortOverview = conv.structured.overview.substring(0, 150);
+          omiSection += `  - ${shortOverview}${conv.structured.overview.length > 150 ? "..." : ""}
+`;
+        }
+      }
+      omiSection += "\n";
+    }
+    if (this.settings.dailyNoteIncludeMemories && todaysMemories.length > 0) {
+      omiSection += `### Memories (${todaysMemories.length})
+
+`;
+      for (const memory of todaysMemories) {
+        const emoji = this.getCategoryEmoji(memory.category);
+        const fileName = this.generateFileName(memory, "memory");
+        const shortContent = memory.content.substring(0, 100);
+        omiSection += `- ${emoji} [[${this.settings.memoriesFolder}/${fileName}|${shortContent}${memory.content.length > 100 ? "..." : ""}]]
+`;
+      }
+      omiSection += "\n";
+    }
+    if (this.settings.dailyNoteIncludeActionItems && todaysActionItems.length > 0) {
+      omiSection += `### Action Items (${todaysActionItems.length})
+
+`;
+      for (const item of todaysActionItems) {
+        const checkbox = item.completed ? "[x]" : "[ ]";
+        const fileName = this.generateFileName(item, "action-item");
+        omiSection += `- ${checkbox} [[${this.settings.actionItemsFolder}/${fileName}|${item.description}]]
+`;
+      }
+      omiSection += "\n";
+    }
+    const sectionRegex = new RegExp(
+      `${this.escapeRegex(this.settings.dailyNoteSectionHeader)}[\\s\\S]*?(?=\\n## |\\n# |$)`,
+      "g"
+    );
+    if (content.match(sectionRegex)) {
+      content = content.replace(sectionRegex, omiSection.trim());
+    } else {
+      if (this.settings.dailyNotePosition === "prepend") {
+        const firstHeadingEnd = content.indexOf("\n\n");
+        if (firstHeadingEnd !== -1) {
+          content = content.slice(0, firstHeadingEnd + 2) + omiSection + content.slice(firstHeadingEnd + 2);
+        } else {
+          content = content + omiSection;
+        }
+      } else {
+        content = content + omiSection;
+      }
+    }
+    const file = this.app.vault.getAbstractFileByPath(path);
+    if (file) {
+      await this.app.vault.modify(file, content);
+    }
+  }
+  escapeRegex(string) {
+    return string.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   }
   // ============================================================================
   // Content Generation
@@ -500,13 +668,14 @@ ${conversation.structured.overview}
   // ============================================================================
   // Sync Operations
   // ============================================================================
-  async syncAll(silent = false) {
+  async syncAll(silent = false, forceFullSync = false) {
     if (!this.settings.apiKey) {
       new import_obsidian.Notice("Omi Sync: Please configure your API key in settings");
       return { memories: 0, conversations: 0, actionItems: 0, errors: ["No API key configured"] };
     }
     if (!silent) {
-      new import_obsidian.Notice("Omi Sync: Starting sync...");
+      const syncType = this.settings.enableIncrementalSync && !forceFullSync ? "incremental" : "full";
+      new import_obsidian.Notice(`Omi Sync: Starting ${syncType} sync...`);
     }
     const result = {
       memories: 0,
@@ -514,15 +683,24 @@ ${conversation.structured.overview}
       actionItems: 0,
       errors: []
     };
+    const syncedMemories = [];
+    const syncedConversations = [];
+    const syncedActionItems = [];
     try {
-      const memoriesResult = await this.syncMemories(true);
-      result.memories = memoriesResult;
-      const conversationsResult = await this.syncConversations(true);
-      result.conversations = conversationsResult;
-      const actionItemsResult = await this.syncActionItems(true);
-      result.actionItems = actionItemsResult;
+      const { count: memoriesCount, items: memories } = await this.syncMemoriesWithItems(true, forceFullSync);
+      result.memories = memoriesCount;
+      syncedMemories.push(...memories);
+      const { count: conversationsCount, items: conversations } = await this.syncConversationsWithItems(true, forceFullSync);
+      result.conversations = conversationsCount;
+      syncedConversations.push(...conversations);
+      const { count: actionItemsCount, items: actionItems } = await this.syncActionItemsWithItems(true, forceFullSync);
+      result.actionItems = actionItemsCount;
+      syncedActionItems.push(...actionItems);
       this.settings.lastSyncTimestamp = Date.now();
       await this.saveSettings();
+      if (this.settings.enableDailyNoteIntegration) {
+        await this.updateDailyNote(/* @__PURE__ */ new Date(), syncedMemories, syncedConversations, syncedActionItems);
+      }
       if (!silent) {
         new import_obsidian.Notice(
           `Omi Sync complete!
@@ -538,17 +716,24 @@ ${conversation.structured.overview}
     }
     return result;
   }
-  async syncMemories(silent = false) {
+  async syncMemories(silent = false, forceFullSync = false) {
+    const { count } = await this.syncMemoriesWithItems(silent, forceFullSync);
+    return count;
+  }
+  async syncMemoriesWithItems(silent = false, forceFullSync = false) {
     if (!this.settings.apiKey) {
       if (!silent)
         new import_obsidian.Notice("Omi Sync: Please configure your API key");
-      return 0;
+      return { count: 0, items: [] };
     }
     try {
       await this.ensureFolderExists(this.settings.memoriesFolder);
       const memories = await this.fetchMemories();
       let syncedCount = 0;
-      for (const memory of memories) {
+      const syncedItems = [];
+      const lastSync = this.settings.lastMemorySyncTime;
+      const filteredMemories = this.settings.enableIncrementalSync && !forceFullSync && lastSync ? memories.filter((m) => m.created_at && m.created_at > lastSync) : memories;
+      for (const memory of filteredMemories) {
         if (!memory.content || memory.content.trim() === "")
           continue;
         const fileName = this.generateFileName(memory, "memory");
@@ -561,29 +746,40 @@ ${conversation.structured.overview}
           await this.app.vault.create(filePath, content);
         }
         syncedCount++;
+        syncedItems.push(memory);
       }
+      this.settings.lastMemorySyncTime = (/* @__PURE__ */ new Date()).toISOString();
+      await this.saveSettings();
       if (!silent) {
         new import_obsidian.Notice(`Omi Sync: Synced ${syncedCount} memories`);
       }
-      return syncedCount;
+      return { count: syncedCount, items: syncedItems };
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : String(error);
       new import_obsidian.Notice(`Omi Sync error (memories): ${errorMsg}`);
       console.error("Omi Sync memories error:", error);
-      return 0;
+      return { count: 0, items: [] };
     }
   }
-  async syncConversations(silent = false) {
+  async syncConversations(silent = false, forceFullSync = false) {
+    const { count } = await this.syncConversationsWithItems(silent, forceFullSync);
+    return count;
+  }
+  async syncConversationsWithItems(silent = false, forceFullSync = false) {
     if (!this.settings.apiKey) {
       if (!silent)
         new import_obsidian.Notice("Omi Sync: Please configure your API key");
-      return 0;
+      return { count: 0, items: [] };
     }
     try {
       await this.ensureFolderExists(this.settings.conversationsFolder);
-      const conversations = await this.fetchConversations();
+      const startDate = this.settings.enableIncrementalSync && !forceFullSync && this.settings.lastConversationSyncTime ? this.settings.lastConversationSyncTime : void 0;
+      const conversations = await this.fetchConversations(100, 0, startDate);
       let syncedCount = 0;
+      const syncedItems = [];
       for (const conversation of conversations) {
+        if (conversation.discarded || conversation.deleted)
+          continue;
         const fileName = this.generateFileName(conversation, "conversation");
         const filePath = (0, import_obsidian.normalizePath)(`${this.settings.conversationsFolder}/${fileName}.md`);
         const existingFile = this.app.vault.getAbstractFileByPath(filePath);
@@ -594,28 +790,37 @@ ${conversation.structured.overview}
           await this.app.vault.create(filePath, content);
         }
         syncedCount++;
+        syncedItems.push(conversation);
       }
+      this.settings.lastConversationSyncTime = (/* @__PURE__ */ new Date()).toISOString();
+      await this.saveSettings();
       if (!silent) {
         new import_obsidian.Notice(`Omi Sync: Synced ${syncedCount} conversations`);
       }
-      return syncedCount;
+      return { count: syncedCount, items: syncedItems };
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : String(error);
       new import_obsidian.Notice(`Omi Sync error (conversations): ${errorMsg}`);
       console.error("Omi Sync conversations error:", error);
-      return 0;
+      return { count: 0, items: [] };
     }
   }
-  async syncActionItems(silent = false) {
+  async syncActionItems(silent = false, forceFullSync = false) {
+    const { count } = await this.syncActionItemsWithItems(silent, forceFullSync);
+    return count;
+  }
+  async syncActionItemsWithItems(silent = false, forceFullSync = false) {
     if (!this.settings.apiKey) {
       if (!silent)
         new import_obsidian.Notice("Omi Sync: Please configure your API key");
-      return 0;
+      return { count: 0, items: [] };
     }
     try {
       await this.ensureFolderExists(this.settings.actionItemsFolder);
-      const actionItems = await this.fetchActionItems();
+      const startDate = this.settings.enableIncrementalSync && !forceFullSync && this.settings.lastActionItemSyncTime ? this.settings.lastActionItemSyncTime : void 0;
+      const actionItems = await this.fetchActionItems(100, 0, startDate);
       let syncedCount = 0;
+      const syncedItems = [];
       for (const actionItem of actionItems) {
         if (actionItem.deleted)
           continue;
@@ -629,16 +834,44 @@ ${conversation.structured.overview}
           await this.app.vault.create(filePath, content);
         }
         syncedCount++;
+        syncedItems.push(actionItem);
       }
+      this.settings.lastActionItemSyncTime = (/* @__PURE__ */ new Date()).toISOString();
+      await this.saveSettings();
       if (!silent) {
         new import_obsidian.Notice(`Omi Sync: Synced ${syncedCount} action items`);
       }
-      return syncedCount;
+      return { count: syncedCount, items: syncedItems };
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : String(error);
       new import_obsidian.Notice(`Omi Sync error (action items): ${errorMsg}`);
       console.error("Omi Sync action items error:", error);
-      return 0;
+      return { count: 0, items: [] };
+    }
+  }
+  async syncToDailyNote() {
+    if (!this.settings.apiKey) {
+      new import_obsidian.Notice("Omi Sync: Please configure your API key in settings");
+      return;
+    }
+    if (!this.settings.enableDailyNoteIntegration) {
+      new import_obsidian.Notice("Omi Sync: Daily note integration is disabled. Enable it in settings first.");
+      return;
+    }
+    new import_obsidian.Notice("Omi Sync: Fetching today's data for daily note...");
+    try {
+      const today = /* @__PURE__ */ new Date();
+      const todayStr = today.toISOString().split("T")[0];
+      const memories = await this.fetchMemories();
+      const conversations = await this.fetchConversations(100, 0, todayStr);
+      const actionItems = await this.fetchActionItems(100, 0, todayStr);
+      const todaysMemories = memories.filter((m) => m.created_at && m.created_at.startsWith(todayStr));
+      await this.updateDailyNote(today, todaysMemories, conversations, actionItems);
+      const totalItems = todaysMemories.length + conversations.length + actionItems.length;
+      new import_obsidian.Notice(`Omi Sync: Added ${totalItems} items to today's daily note`);
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      new import_obsidian.Notice(`Omi Sync error: ${errorMsg}`);
     }
   }
 };
@@ -775,10 +1008,99 @@ var OmiSyncSettingTab = class extends import_obsidian.PluginSettingTab {
         await this.plugin.saveSettings();
       })
     );
+    containerEl.createEl("h2", { text: "Incremental Sync" });
+    new import_obsidian.Setting(containerEl).setName("Enable Incremental Sync").setDesc("Only fetch items newer than the last sync time. Disable to always do a full sync.").addToggle(
+      (toggle) => toggle.setValue(this.plugin.settings.enableIncrementalSync).onChange(async (value) => {
+        this.plugin.settings.enableIncrementalSync = value;
+        await this.plugin.saveSettings();
+      })
+    );
+    new import_obsidian.Setting(containerEl).setName("Reset Sync History").setDesc("Clear last sync timestamps to force a full sync on next run").addButton(
+      (button) => button.setButtonText("Reset").setWarning().onClick(async () => {
+        this.plugin.settings.lastMemorySyncTime = "";
+        this.plugin.settings.lastConversationSyncTime = "";
+        this.plugin.settings.lastActionItemSyncTime = "";
+        await this.plugin.saveSettings();
+        new import_obsidian.Notice("Sync history cleared. Next sync will be a full sync.");
+      })
+    );
+    if (this.plugin.settings.lastMemorySyncTime || this.plugin.settings.lastConversationSyncTime || this.plugin.settings.lastActionItemSyncTime) {
+      const syncInfoDiv = containerEl.createDiv({ cls: "setting-item-description" });
+      syncInfoDiv.createEl("p", { text: "Last sync times:" });
+      const syncList = syncInfoDiv.createEl("ul");
+      if (this.plugin.settings.lastMemorySyncTime) {
+        syncList.createEl("li", { text: `Memories: ${new Date(this.plugin.settings.lastMemorySyncTime).toLocaleString()}` });
+      }
+      if (this.plugin.settings.lastConversationSyncTime) {
+        syncList.createEl("li", { text: `Conversations: ${new Date(this.plugin.settings.lastConversationSyncTime).toLocaleString()}` });
+      }
+      if (this.plugin.settings.lastActionItemSyncTime) {
+        syncList.createEl("li", { text: `Action Items: ${new Date(this.plugin.settings.lastActionItemSyncTime).toLocaleString()}` });
+      }
+    }
+    containerEl.createEl("h2", { text: "Daily Note Integration" });
+    new import_obsidian.Setting(containerEl).setName("Enable Daily Note Integration").setDesc("Automatically add synced items to your daily note").addToggle(
+      (toggle) => toggle.setValue(this.plugin.settings.enableDailyNoteIntegration).onChange(async (value) => {
+        this.plugin.settings.enableDailyNoteIntegration = value;
+        await this.plugin.saveSettings();
+      })
+    );
+    new import_obsidian.Setting(containerEl).setName("Daily Note Folder").setDesc("Folder where daily notes are stored (leave empty for vault root)").addText(
+      (text) => text.setPlaceholder("Daily Notes").setValue(this.plugin.settings.dailyNoteFolder).onChange(async (value) => {
+        this.plugin.settings.dailyNoteFolder = value;
+        await this.plugin.saveSettings();
+      })
+    );
+    new import_obsidian.Setting(containerEl).setName("Daily Note Format").setDesc("Date format for daily note filenames (YYYY=year, MM=month, DD=day)").addText(
+      (text) => text.setPlaceholder("YYYY-MM-DD").setValue(this.plugin.settings.dailyNoteFormat).onChange(async (value) => {
+        this.plugin.settings.dailyNoteFormat = value || "YYYY-MM-DD";
+        await this.plugin.saveSettings();
+      })
+    );
+    new import_obsidian.Setting(containerEl).setName("Section Header").setDesc("Markdown header to use for the Omi section in daily notes").addText(
+      (text) => text.setPlaceholder("## Omi Summary").setValue(this.plugin.settings.dailyNoteSectionHeader).onChange(async (value) => {
+        this.plugin.settings.dailyNoteSectionHeader = value || "## Omi Summary";
+        await this.plugin.saveSettings();
+      })
+    );
+    new import_obsidian.Setting(containerEl).setName("Section Position").setDesc("Where to add the Omi section in the daily note").addDropdown(
+      (dropdown) => dropdown.addOption("append", "End of note").addOption("prepend", "After first heading").setValue(this.plugin.settings.dailyNotePosition).onChange(async (value) => {
+        this.plugin.settings.dailyNotePosition = value;
+        await this.plugin.saveSettings();
+      })
+    );
+    new import_obsidian.Setting(containerEl).setName("Include Memories").setDesc("Add memories to daily note").addToggle(
+      (toggle) => toggle.setValue(this.plugin.settings.dailyNoteIncludeMemories).onChange(async (value) => {
+        this.plugin.settings.dailyNoteIncludeMemories = value;
+        await this.plugin.saveSettings();
+      })
+    );
+    new import_obsidian.Setting(containerEl).setName("Include Conversations").setDesc("Add conversations to daily note").addToggle(
+      (toggle) => toggle.setValue(this.plugin.settings.dailyNoteIncludeConversations).onChange(async (value) => {
+        this.plugin.settings.dailyNoteIncludeConversations = value;
+        await this.plugin.saveSettings();
+      })
+    );
+    new import_obsidian.Setting(containerEl).setName("Include Action Items").setDesc("Add action items to daily note").addToggle(
+      (toggle) => toggle.setValue(this.plugin.settings.dailyNoteIncludeActionItems).onChange(async (value) => {
+        this.plugin.settings.dailyNoteIncludeActionItems = value;
+        await this.plugin.saveSettings();
+      })
+    );
+    new import_obsidian.Setting(containerEl).setName("Sync to Daily Note Now").setDesc("Manually add today's Omi data to your daily note").addButton(
+      (button) => button.setButtonText("Update Daily Note").onClick(async () => {
+        await this.plugin.syncToDailyNote();
+      })
+    );
     containerEl.createEl("h2", { text: "Manual Sync" });
-    new import_obsidian.Setting(containerEl).setName("Sync Now").setDesc("Manually trigger a full sync of all Omi data").addButton(
+    new import_obsidian.Setting(containerEl).setName("Sync Now").setDesc("Sync new Omi data (uses incremental sync if enabled)").addButton(
       (button) => button.setButtonText("Sync All").setCta().onClick(async () => {
         await this.plugin.syncAll();
+      })
+    );
+    new import_obsidian.Setting(containerEl).setName("Force Full Sync").setDesc("Re-sync all data regardless of last sync time").addButton(
+      (button) => button.setButtonText("Full Sync").setWarning().onClick(async () => {
+        await this.plugin.syncAll(false, true);
       })
     );
     new import_obsidian.Setting(containerEl).setName("Sync Memories Only").addButton(
