@@ -154,14 +154,16 @@ var OmiSyncPlugin = class extends import_obsidian.Plugin {
   async fetchMemories(limit = 100, offset = 0) {
     const memories = await this.apiRequest("/user/memories", {
       limit: limit.toString(),
-      offset: offset.toString()
+      offset: offset.toString(),
+      include_transcript: "true"
     });
     return memories || [];
   }
   async fetchConversations(limit = 100, offset = 0) {
     const conversations = await this.apiRequest("/user/conversations", {
       limit: limit.toString(),
-      offset: offset.toString()
+      offset: offset.toString(),
+      include_transcript: "true"
     });
     return conversations || [];
   }
