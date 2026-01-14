@@ -154,8 +154,7 @@ var OmiSyncPlugin = class extends import_obsidian.Plugin {
   async fetchMemories(limit = 100, offset = 0) {
     const memories = await this.apiRequest("/user/memories", {
       limit: limit.toString(),
-      offset: offset.toString(),
-      include_transcript: "true"
+      offset: offset.toString()
     });
     return memories || [];
   }
@@ -194,25 +193,104 @@ var OmiSyncPlugin = class extends import_obsidian.Plugin {
     return tagString.split(",").map((tag) => tag.trim()).filter((tag) => tag.length > 0);
   }
   generateMemoryContent(memory) {
-    var _a, _b, _c, _d, _e, _f, _g;
     const frontmatter = {
       id: memory.id,
       type: "omi-memory",
-      created: memory.created_at,
-      source: memory.source || "unknown",
       synced: (/* @__PURE__ */ new Date()).toISOString()
     };
-    if (memory.started_at)
-      frontmatter.started = memory.started_at;
-    if (memory.finished_at)
-      frontmatter.finished = memory.finished_at;
-    if (memory.language)
-      frontmatter.language = memory.language;
-    if ((_a = memory.structured) == null ? void 0 : _a.category)
-      frontmatter.category = memory.structured.category;
+    if (memory.created_at)
+      frontmatter.created = memory.created_at;
+    if (memory.updated_at)
+      frontmatter.updated = memory.updated_at;
+    if (memory.category)
+      frontmatter.category = memory.category;
+    if (memory.visibility)
+      frontmatter.visibility = memory.visibility;
     const tags = this.parseTags(this.settings.memoryTags);
-    if (this.settings.includeCategoryTag && ((_b = memory.structured) == null ? void 0 : _b.category)) {
-      const categoryTag = memory.structured.category.toLowerCase().replace(/\s+/g, "-");
+    if (this.settings.includeCategoryTag && memory.category) {
+      const categoryTag = memory.category.toLowerCase().replace(/\s+/g, "-");
+      if (!tags.includes(categoryTag)) {
+        tags.push(categoryTag);
+      }
+    }
+    if (memory.tags && memory.tags.length > 0) {
+      for (const tag of memory.tags) {
+        if (!tags.includes(tag)) {
+          tags.push(tag);
+        }
+      }
+    }
+    if (tags.length > 0) {
+      frontmatter.tags = tags;
+    }
+    let content = this.generateFrontmatter(frontmatter);
+    const contentLines = memory.content.split("\n");
+    const firstLine = contentLines[0].substring(0, 60);
+    const title = firstLine.length > 50 ? firstLine.substring(0, 50) + "..." : firstLine;
+    const emoji = this.getCategoryEmoji(memory.category);
+    content += `# ${emoji} ${title}
+
+`;
+    content += `## Memory
+
+${memory.content}
+
+`;
+    if (memory.category) {
+      content += `**Category:** ${memory.category}
+`;
+    }
+    if (memory.manually_added) {
+      content += `**Manually Added:** Yes
+`;
+    }
+    content += "\n";
+    content += `---
+`;
+    content += `*Synced from Omi on ${(/* @__PURE__ */ new Date()).toLocaleString()}*
+`;
+    return content;
+  }
+  getCategoryEmoji(category) {
+    if (!category)
+      return "\u{1F9E0}";
+    const emojiMap = {
+      "interesting": "\u{1F4A1}",
+      "system": "\u2699\uFE0F",
+      "manual": "\u{1F4DD}",
+      "personal": "\u{1F464}",
+      "work": "\u{1F4BC}",
+      "business": "\u{1F4CA}",
+      "health": "\u{1F3E5}",
+      "finance": "\u{1F4B0}",
+      "travel": "\u2708\uFE0F",
+      "food": "\u{1F37D}\uFE0F",
+      "entertainment": "\u{1F3AC}",
+      "education": "\u{1F4DA}",
+      "social": "\u{1F465}"
+    };
+    return emojiMap[category.toLowerCase()] || "\u{1F9E0}";
+  }
+  generateConversationContent(conversation) {
+    var _a, _b, _c, _d, _e, _f, _g, _h;
+    const frontmatter = {
+      id: conversation.id,
+      type: "omi-conversation",
+      created: conversation.created_at,
+      source: conversation.source || "unknown",
+      synced: (/* @__PURE__ */ new Date()).toISOString()
+    };
+    if (conversation.started_at)
+      frontmatter.started = conversation.started_at;
+    if (conversation.finished_at)
+      frontmatter.finished = conversation.finished_at;
+    if (conversation.language)
+      frontmatter.language = conversation.language;
+    if ((_a = conversation.structured) == null ? void 0 : _a.category)
+      frontmatter.category = conversation.structured.category;
+    const tags = this.parseTags(this.settings.conversationTags);
+    if (this.settings.includeCategoryTag && ((_b = conversation.structured) == null ? void 0 : _b.category)) {
+      const categoryTag = conversation.structured.category.toLowerCase().replace(/\s+/g, "-");
       if (!tags.includes(categoryTag)) {
         tags.push(categoryTag);
       }
@@ -221,34 +299,43 @@ var OmiSyncPlugin = class extends import_obsidian.Plugin {
       frontmatter.tags = tags;
     }
     let content = this.generateFrontmatter(frontmatter);
-    const title = ((_c = memory.structured) == null ? void 0 : _c.title) || "Untitled Memory";
-    const emoji = ((_d = memory.structured) == null ? void 0 : _d.emoji) || "\u{1F9E0}";
+    const title = ((_c = conversation.structured) == null ? void 0 : _c.title) || this.generateConversationTitle(conversation);
+    const emoji = ((_d = conversation.structured) == null ? void 0 : _d.emoji) || "\u{1F4AC}";
     content += `# ${emoji} ${title}
 
 `;
-    if ((_e = memory.structured) == null ? void 0 : _e.overview) {
-      content += `## Overview
-
-${memory.structured.overview}
+    if (conversation.started_at && conversation.finished_at) {
+      const start = new Date(conversation.started_at);
+      const end = new Date(conversation.finished_at);
+      const durationMs = end.getTime() - start.getTime();
+      const durationMins = Math.round(durationMs / 6e4);
+      content += `**Duration:** ${durationMins} minutes
 
 `;
     }
-    if (((_f = memory.structured) == null ? void 0 : _f.action_items) && memory.structured.action_items.length > 0) {
+    if ((_e = conversation.structured) == null ? void 0 : _e.overview) {
+      content += `## Overview
+
+${conversation.structured.overview}
+
+`;
+    }
+    if (((_f = conversation.structured) == null ? void 0 : _f.action_items) && conversation.structured.action_items.length > 0) {
       content += `## Action Items
 
 `;
-      for (const item of memory.structured.action_items) {
+      for (const item of conversation.structured.action_items) {
         const checkbox = item.completed ? "[x]" : "[ ]";
         content += `- ${checkbox} ${item.description}
 `;
       }
       content += "\n";
     }
-    if (((_g = memory.structured) == null ? void 0 : _g.events) && memory.structured.events.length > 0) {
+    if (((_g = conversation.structured) == null ? void 0 : _g.events) && conversation.structured.events.length > 0) {
       content += `## Events
 
 `;
-      for (const event of memory.structured.events) {
+      for (const event of conversation.structured.events) {
         content += `### ${event.title}
 `;
         if (event.description)
@@ -264,21 +351,21 @@ ${memory.structured.overview}
       }
     }
     if (this.settings.includeTranscript) {
-      if (memory.transcript_segments && memory.transcript_segments.length > 0) {
+      if (conversation.transcript_segments && conversation.transcript_segments.length > 0) {
         content += `## Transcript
 
 `;
-        for (const segment of memory.transcript_segments) {
-          const speaker = segment.is_user ? "**You**" : segment.speaker || "Speaker";
+        for (const segment of conversation.transcript_segments) {
+          const speaker = segment.is_user ? "**You**" : segment.speaker || `Speaker ${(_h = segment.speaker_id) != null ? _h : ""}`;
           content += `> ${speaker}: ${segment.text}
 >
 `;
         }
         content += "\n";
-      } else if (memory.transcript) {
+      } else {
         content += `## Transcript
 
-${memory.transcript}
+*No transcript available for this conversation.*
 
 `;
       }
@@ -289,65 +376,9 @@ ${memory.transcript}
 `;
     return content;
   }
-  generateConversationContent(conversation) {
-    const frontmatter = {
-      id: conversation.id,
-      type: "omi-conversation",
-      created: conversation.created_at,
-      source: conversation.source || "unknown",
-      status: conversation.status || "unknown",
-      synced: (/* @__PURE__ */ new Date()).toISOString()
-    };
-    if (conversation.started_at)
-      frontmatter.started = conversation.started_at;
-    if (conversation.finished_at)
-      frontmatter.finished = conversation.finished_at;
-    const tags = this.parseTags(this.settings.conversationTags);
-    if (tags.length > 0) {
-      frontmatter.tags = tags;
-    }
-    let content = this.generateFrontmatter(frontmatter);
+  generateConversationTitle(conversation) {
     const date = new Date(conversation.created_at);
-    const title = `Conversation - ${date.toLocaleDateString()} ${date.toLocaleTimeString()}`;
-    content += `# \u{1F4AC} ${title}
-
-`;
-    if (conversation.started_at && conversation.finished_at) {
-      const start = new Date(conversation.started_at);
-      const end = new Date(conversation.finished_at);
-      const durationMs = end.getTime() - start.getTime();
-      const durationMins = Math.round(durationMs / 6e4);
-      content += `**Duration:** ${durationMins} minutes
-
-`;
-    }
-    if (conversation.transcript_segments && conversation.transcript_segments.length > 0) {
-      content += `## Transcript
-
-`;
-      for (const segment of conversation.transcript_segments) {
-        const speaker = segment.is_user ? "**You**" : segment.speaker || `Speaker ${segment.speaker_id || ""}`;
-        content += `> ${speaker}: ${segment.text}
->
-`;
-      }
-      content += "\n";
-    } else if (conversation.transcript) {
-      content += `## Transcript
-
-${conversation.transcript}
-
-`;
-    } else {
-      content += `*No transcript available for this conversation.*
-
-`;
-    }
-    content += `---
-`;
-    content += `*Synced from Omi on ${(/* @__PURE__ */ new Date()).toLocaleString()}*
-`;
-    return content;
+    return `Conversation - ${date.toLocaleDateString()} ${date.toLocaleTimeString()}`;
   }
   generateActionItemContent(actionItem) {
     const frontmatter = {
@@ -436,11 +467,28 @@ ${conversation.transcript}
   }
   generateFileName(item, type) {
     var _a;
-    const date = new Date(item.created_at || item.created_at);
-    const dateStr = date.toISOString().split("T")[0];
+    let dateStr = "";
+    if (type === "memory") {
+      const memory = item;
+      const date = memory.created_at ? new Date(memory.created_at) : /* @__PURE__ */ new Date();
+      dateStr = date.toISOString().split("T")[0];
+    } else if (type === "conversation") {
+      const conv = item;
+      const date = new Date(conv.created_at);
+      dateStr = date.toISOString().split("T")[0];
+    } else {
+      const action = item;
+      const date = new Date(action.created_at);
+      dateStr = date.toISOString().split("T")[0];
+    }
     let title = "";
-    if (type === "memory" && ((_a = item.structured) == null ? void 0 : _a.title)) {
-      title = item.structured.title;
+    if (type === "memory") {
+      const memory = item;
+      const firstLine = memory.content.split("\n")[0];
+      title = firstLine.substring(0, 50);
+    } else if (type === "conversation") {
+      const conv = item;
+      title = ((_a = conv.structured) == null ? void 0 : _a.title) || item.id.substring(0, 8);
     } else if (type === "action-item") {
       title = item.description.substring(0, 50);
     } else {
@@ -501,7 +549,7 @@ ${conversation.transcript}
       const memories = await this.fetchMemories();
       let syncedCount = 0;
       for (const memory of memories) {
-        if (memory.discarded || memory.deleted)
+        if (!memory.content || memory.content.trim() === "")
           continue;
         const fileName = this.generateFileName(memory, "memory");
         const filePath = (0, import_obsidian.normalizePath)(`${this.settings.memoriesFolder}/${fileName}.md`);
