@@ -1,0 +1,10 @@
+{
+	"id": "omi-sync",
+	"name": "Omi Sync",
+	"version": "1.0.0",
+	"minAppVersion": "1.0.0",
+	"description": "Sync your Omi conversations, memories, and action items to Obsidian as markdown notes.",
+	"author": "Your Name",
+	"authorUrl": "https://github.com/yourusername",
+	"isDesktopOnly": false
+}
