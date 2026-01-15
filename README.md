@@ -13,6 +13,7 @@ Sync your [Omi](https://omi.me) conversations, memories, and action items direct
 - 📅 **Daily Note Integration** - Automatically add today's Omi data to your daily note
 - 🏷️ **Custom Tags** - Fully customizable tags for each content type with frontmatter support
 - 🔗 **Cross-Linking** - Action items link back to their source conversations
+- 📋 **TaskNotes Integration** - Optional integration with the [TaskNotes](https://github.com/callumalpass/tasknotes) plugin for advanced task management
 
 ## Installation
 
@@ -31,6 +32,7 @@ Sync your [Omi](https://omi.me) conversations, memories, and action items direct
 4. Enter "https://github.com/atomicpapa/obsidian-omi-sync"
 5. Click Add plugin
 6. You can now back out and go to settings for Omi-Sync.      
+
 
 ### Manual Installation
 
@@ -147,7 +149,7 @@ Brainstorming session for new features with the team.
 > **Speaker 1**: I think we should focus on the user interface first
 ```
 
-#### Action Items
+#### Action Items (Standard Format)
 ```markdown
 ---
 id: action_101
@@ -170,6 +172,91 @@ tags:
 - **Related Conversation:** [[Omi/Conversations/2024-01-15 - Feature Discussion]]
 ```
 
+#### Action Items (TaskNotes Format)
+When TaskNotes integration is enabled, action items are created in TaskNotes-compatible format:
+
+```markdown
+---
+title: "Schedule follow-up meeting with the team"
+status: "open"
+priority: "medium"
+contexts:
+  - "omi"
+projects: []
+tags:
+  - "task"
+  - "omi"
+  - "omi/action-item"
+omi-id: "action_101"
+omi-source: "omi"
+omi-created: "2024-01-15T10:35:00Z"
+omi-conversation: "[[Omi/Conversations/2024-01-15 - Feature Discussion]]"
+---
+
+Schedule follow-up meeting with the team
+
+## Source
+
+This task was automatically synced from Omi on Jan 15, 2024, 10:35 AM.
+
+**Related Conversation:** [[Omi/Conversations/2024-01-15 - Feature Discussion]]
+```
+
+## TaskNotes Integration
+
+Omi Sync includes optional integration with the [TaskNotes](https://github.com/callumalpass/tasknotes) plugin. When enabled, action items from Omi are created in TaskNotes-compatible format, allowing you to manage them alongside your other TaskNotes tasks.
+
+### Enabling TaskNotes Integration
+
+1. Open Obsidian Settings → Omi Sync
+2. Scroll to the **TaskNotes Integration** section
+3. Enable **Enable TaskNotes Integration**
+4. Configure the settings to match your TaskNotes configuration
+
+### Configuration
+
+The integration supports full customization to match your TaskNotes setup:
+
+#### Basic Settings
+- **TaskNotes Folder** - Should match the folder where TaskNotes stores tasks
+- **Default Status** - Status for new tasks (open, in-progress, todo, next, waiting)
+- **Default Priority** - Priority for new tasks (low, medium, high, urgent)
+- **Contexts** - Default contexts to apply (comma-separated)
+
+#### Field Mappings
+If you've customized property names in TaskNotes' Field Mapping settings, configure the same names here:
+- Title, Status, Priority, Due, Scheduled, Contexts, Projects, Tags, Completed
+
+#### Task Identification
+TaskNotes identifies tasks either by tag or by a property/value pair. Configure this to match your TaskNotes settings:
+
+**Tag-based identification** (default):
+- Set **Identification Method** to "Tag-based"
+- Set **Identification Tag** to match your TaskNotes setting (e.g., `task`)
+
+**Property-based identification**:
+- Set **Identification Method** to "Property-based"
+- Set **Property Name** and **Property Value** to match your TaskNotes settings (e.g., `type: task`)
+
+### Example Configurations
+
+#### Default TaskNotes Setup
+If you're using TaskNotes with default settings:
+- Enable TaskNotes Integration: ✅
+- TaskNotes Folder: `Tasks`
+- Identification Method: Tag-based
+- Identification Tag: `task`
+
+#### Custom Field Names
+If you use `deadline` instead of `due` in TaskNotes:
+- Due Date Field: `deadline`
+
+#### Property-based Identification
+If TaskNotes identifies tasks by `type: task`:
+- Identification Method: Property-based
+- Property Name: `type`
+- Property Value: `task`
+
 ## Settings
 
 | Setting | Description | Default |
@@ -177,7 +264,7 @@ tags:
 | API Key | Your Omi Developer API key | - |
 | Memories Folder | Where to save memories | `Omi/Memories` |
 | Conversations Folder | Where to save conversations | `Omi/Conversations` |
-| Action Items Folder | Where to save action items | `Omi/Action Items` |
+| Action Items Folder | Where to save action items (when TaskNotes disabled) | `Omi/Action Items` |
 | Sync on Startup | Auto-sync when Obsidian opens | ✅ |
 | Auto Sync | Enable background syncing | ❌ |
 | Sync Interval | Minutes between auto-syncs | 30 |
@@ -199,6 +286,27 @@ tags:
 | Include Memories | Add memories to daily note | ✅ |
 | Include Conversations | Add conversations to daily note | ✅ |
 | Include Action Items | Add action items to daily note | ✅ |
+| **TaskNotes Integration** | | |
+| Enable TaskNotes Integration | Create action items in TaskNotes format | ❌ |
+| TaskNotes Folder | Folder where TaskNotes stores tasks | `Tasks` |
+| Default Status | Default status for new tasks | `open` |
+| Default Priority | Default priority for new tasks | `medium` |
+| Contexts | Default contexts (comma-separated) | `omi` |
+| **TaskNotes Field Mappings** | | |
+| Title Field | Property name for task title | `title` |
+| Status Field | Property name for task status | `status` |
+| Priority Field | Property name for task priority | `priority` |
+| Due Date Field | Property name for due date | `due` |
+| Scheduled Date Field | Property name for scheduled date | `scheduled` |
+| Contexts Field | Property name for contexts | `contexts` |
+| Projects Field | Property name for projects | `projects` |
+| Tags Field | Property name for tags | `tags` |
+| Completed Date Field | Property name for completion date | `completed` |
+| **TaskNotes Task Identification** | | |
+| Identification Method | How TaskNotes identifies tasks | Tag-based |
+| Identification Tag | Tag that marks a note as a task | `task` |
+| Identification Property Name | Property name for identification | `type` |
+| Identification Property Value | Property value for identification | `task` |
 
 ## Commands
 
@@ -229,6 +337,14 @@ When enabled, the plugin automatically adds a summary of today's Omi data to you
 
 This works great with the [Daily Notes](https://help.obsidian.md/Plugins/Daily+notes) core plugin or [Periodic Notes](https://github.com/liamcain/obsidian-periodic-notes).
 
+### TaskNotes Integration
+
+When using TaskNotes integration:
+- Action items are automatically created in TaskNotes-compatible format
+- Tasks appear in TaskNotes views (Calendar, Kanban, Task List, etc.)
+- Omi metadata is preserved in custom fields (`omi-id`, `omi-source`, `omi-conversation`)
+- Links to source conversations are maintained for context
+
 ### Organizing Your Omi Notes
 
 - Use [Dataview](https://github.com/blacksmithgu/obsidian-dataview) to create dashboards:
@@ -244,7 +360,7 @@ This works great with the [Daily Notes](https://help.obsidian.md/Plugins/Daily+n
 ### Managing Action Items
 
 - The plugin creates task checkboxes that work with Obsidian's task tracking
-- Use plugins like [Tasks](https://github.com/obsidian-tasks-group/obsidian-tasks) for advanced task management
+- Use plugins like [Tasks](https://github.com/obsidian-tasks-group/obsidian-tasks) or [TaskNotes](https://github.com/callumalpass/tasknotes) for advanced task management
 - Action items are cross-linked to their source memories/conversations
 
 ## Troubleshooting
@@ -262,6 +378,12 @@ This works great with the [Daily Notes](https://help.obsidian.md/Plugins/Daily+n
 ### Folder Not Created
 - Ensure you have write permissions in your vault
 - Check that the folder path doesn't contain invalid characters
+
+### TaskNotes Not Recognizing Tasks
+- Verify that TaskNotes Integration is enabled
+- Check that Task Identification settings match your TaskNotes configuration
+- Ensure the TaskNotes Folder setting matches where TaskNotes expects tasks
+- Try a Force Full Sync to regenerate action items with the correct format
 
 ## Privacy & Security
 
@@ -286,8 +408,8 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## Support
 
-- 🐛 [Report a bug](https://github.com/yourusername/obsidian-omi-sync/issues)
-- 💡 [Request a feature](https://github.com/yourusername/obsidian-omi-sync/issues)
+- 🐛 [Report a bug](https://github.com/atomicpapa/obsidian-omi-sync/issues)
+- 💡 [Request a feature](https://github.com/atomicpapa/obsidian-omi-sync/issues)
 - 📖 [Omi Documentation](https://docs.omi.me)
 - 💬 [Obsidian Discord](https://discord.gg/obsidianmd)
 
@@ -295,4 +417,5 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 - [Omi](https://omi.me) for the amazing AI wearable and developer API
 - [Obsidian](https://obsidian.md) for the powerful note-taking platform
+- [TaskNotes](https://github.com/callumalpass/tasknotes) for the excellent task management plugin
 - The Obsidian plugin development community
