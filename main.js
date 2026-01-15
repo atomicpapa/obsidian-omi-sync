@@ -57,7 +57,190 @@ var DEFAULT_SETTINGS = {
   dailyNoteIncludeMemories: true,
   dailyNoteIncludeConversations: true,
   dailyNoteIncludeActionItems: true,
-  dailyNotePosition: "append"
+  dailyNotePosition: "append",
+  // TaskNotes integration defaults
+  enableTaskNotesIntegration: false,
+  taskNotesFolder: "Tasks",
+  taskNotesDefaultStatus: "open",
+  taskNotesDefaultPriority: "medium",
+  taskNotesContexts: "omi",
+  // TaskNotes field mapping defaults
+  taskNotesFieldTitle: "title",
+  taskNotesFieldStatus: "status",
+  taskNotesFieldPriority: "priority",
+  taskNotesFieldDue: "due",
+  taskNotesFieldScheduled: "scheduled",
+  taskNotesFieldContexts: "contexts",
+  taskNotesFieldProjects: "projects",
+  taskNotesFieldTags: "tags",
+  taskNotesFieldCompleted: "completed",
+  // TaskNotes task identification defaults
+  taskNotesIdentificationMethod: "tag",
+  taskNotesIdentificationTag: "task",
+  taskNotesIdentificationPropertyName: "type",
+  taskNotesIdentificationPropertyValue: "task",
+  // Template Customization defaults
+  enableTemplateCustomization: false,
+  memoryTemplate: `---
+id: {{id}}
+type: omi-memory
+synced: {{synced}}
+created: {{created}}
+updated: {{updated}}
+category: {{category}}
+visibility: {{visibility}}
+tags: {{tags}}
+---
+
+# {{emoji}} {{title}}
+
+## Memory
+
+{{content}}
+
+{{#if category}}**Category:** {{category}}{{/if}}
+{{#if manually_added}}**Manually Added:** Yes{{/if}}
+
+---
+*Synced from Omi on {{syncedFormatted}}*`,
+  conversationTemplate: `---
+id: {{id}}
+type: omi-conversation
+created: {{created}}
+source: {{source}}
+synced: {{synced}}
+started: {{started}}
+finished: {{finished}}
+language: {{language}}
+category: {{category}}
+tags: {{tags}}
+---
+
+# {{emoji}} {{title}}
+
+{{#if duration}}**Duration:** {{duration}} minutes{{/if}}
+
+{{#if overview}}## Overview
+
+{{overview}}{{/if}}
+
+{{#if actionItems}}## Action Items
+
+{{#each actionItems}}
+- {{checkbox}} {{description}}
+{{/each}}{{/if}}
+
+{{#if events}}## Events
+
+{{#each events}}
+### {{title}}
+{{#if description}}{{description}}{{/if}}
+{{#if start}}- **Start:** {{start}}{{/if}}
+{{#if duration}}- **Duration:** {{duration}} minutes{{/if}}
+{{/each}}{{/if}}
+
+{{#if includeTranscript}}{{#if transcript}}## Transcript
+
+{{transcript}}{{else}}## Transcript
+
+*No transcript available for this conversation.*{{/if}}{{/if}}
+
+---
+*Synced from Omi on {{syncedFormatted}}*`,
+  actionItemTemplate: `---
+id: {{id}}
+type: omi-action-item
+created: {{created}}
+completed: {{completed}}
+source: {{source}}
+completed_at: {{completed_at}}
+memory_id: {{memory_id}}
+conversation_id: {{conversation_id}}
+tags: {{tags}}
+---
+
+# {{statusEmoji}} Action Item
+
+- {{checkbox}} {{description}}
+
+## Details
+
+- **Created:** {{createdFormatted}}
+{{#if completedFormatted}}- **Completed:** {{completedFormatted}}{{/if}}
+{{#if memoryLink}}- **Related Memory:** {{memoryLink}}{{/if}}
+{{#if conversationLink}}- **Related Conversation:** {{conversationLink}}{{/if}}
+
+---
+*Synced from Omi on {{syncedFormatted}}*`,
+  // Category-based Folders defaults
+  enableCategoryFolders: false,
+  enableCategoryFoldersForMemories: true,
+  enableCategoryFoldersForConversations: true,
+  enableCategoryFoldersForActionItems: false
+};
+var TemplateEngine = class {
+  /**
+   * Renders a template with the provided data context
+   * Supports:
+   * - {{variable}} - Simple variable substitution
+   * - {{#if variable}}...{{/if}} - Conditional blocks
+   * - {{#each array}}...{{/each}} - Array iteration
+   */
+  static render(template, data) {
+    let result = template;
+    result = this.processEach(result, data);
+    result = this.processIf(result, data);
+    result = this.processVariables(result, data);
+    result = this.cleanupEmptyLines(result);
+    return result;
+  }
+  static processEach(template, data) {
+    const eachRegex = /\{\{#each\s+(\w+)\}\}([\s\S]*?)\{\{\/each\}\}/g;
+    return template.replace(eachRegex, (match, arrayName, content) => {
+      const array = data[arrayName];
+      if (!Array.isArray(array) || array.length === 0) {
+        return "";
+      }
+      return array.map((item) => {
+        const itemContext = typeof item === "object" ? { ...data, ...item } : { ...data, this: item };
+        return this.processVariables(content, itemContext);
+      }).join("");
+    });
+  }
+  static processIf(template, data) {
+    const ifRegex = /\{\{#if\s+(\w+)\}\}([\s\S]*?)\{\{\/if\}\}/g;
+    return template.replace(ifRegex, (match, condition, content) => {
+      const value = data[condition];
+      const isTruthy = value !== void 0 && value !== null && value !== false && value !== "";
+      return isTruthy ? content : "";
+    });
+  }
+  static processVariables(template, data) {
+    const varRegex = /\{\{(\w+)\}\}/g;
+    return template.replace(varRegex, (match, varName) => {
+      const value = data[varName];
+      if (value === void 0 || value === null) {
+        return "";
+      }
+      if (Array.isArray(value)) {
+        if (value.length === 0) {
+          return "[]";
+        }
+        return "\n" + value.map((item) => `  - ${item}`).join("\n");
+      }
+      return String(value);
+    });
+  }
+  static cleanupEmptyLines(text) {
+    return text.replace(/^\s*[\r\n]/gm, (match, offset, string) => {
+      const prevChar = string[offset - 1];
+      const nextChar = string[offset + match.length];
+      if (prevChar === "\n" || nextChar === "\n") {
+        return "";
+      }
+      return "\n";
+    });
+  }
 };
 var OmiSyncPlugin = class extends import_obsidian.Plugin {
   constructor() {
@@ -219,6 +402,17 @@ var OmiSyncPlugin = class extends import_obsidian.Plugin {
       await this.app.vault.createFolder(normalizedPath);
     }
   }
+  /**
+   * Get the folder path for an item, optionally organizing by category
+   */
+  getFolderPath(baseFolder, category, itemType) {
+    const useCategoryFolders = this.settings.enableCategoryFolders && (itemType === "memory" && this.settings.enableCategoryFoldersForMemories || itemType === "conversation" && this.settings.enableCategoryFoldersForConversations || itemType === "action-item" && this.settings.enableCategoryFoldersForActionItems);
+    if (!useCategoryFolders || !category) {
+      return baseFolder;
+    }
+    const sanitizedCategory = category.replace(/[\\/:*?"<>|]/g, "-").replace(/\s+/g, " ").trim();
+    return `${baseFolder}/${sanitizedCategory}`;
+  }
   // ============================================================================
   // Daily Note Integration
   // ============================================================================
@@ -319,8 +513,9 @@ ${this.settings.dailyNoteSectionHeader}
 `;
       for (const item of todaysActionItems) {
         const checkbox = item.completed ? "[x]" : "[ ]";
+        const folder = this.settings.enableTaskNotesIntegration ? this.settings.taskNotesFolder : this.settings.actionItemsFolder;
         const fileName = this.generateFileName(item, "action-item");
-        omiSection += `- ${checkbox} [[${this.settings.actionItemsFolder}/${fileName}|${item.description}]]
+        omiSection += `- ${checkbox} [[${folder}/${fileName}|${item.description}]]
 `;
       }
       omiSection += "\n";
@@ -361,19 +556,6 @@ ${this.settings.dailyNoteSectionHeader}
     return tagString.split(",").map((tag) => tag.trim()).filter((tag) => tag.length > 0);
   }
   generateMemoryContent(memory) {
-    const frontmatter = {
-      id: memory.id,
-      type: "omi-memory",
-      synced: (/* @__PURE__ */ new Date()).toISOString()
-    };
-    if (memory.created_at)
-      frontmatter.created = memory.created_at;
-    if (memory.updated_at)
-      frontmatter.updated = memory.updated_at;
-    if (memory.category)
-      frontmatter.category = memory.category;
-    if (memory.visibility)
-      frontmatter.visibility = memory.visibility;
     const tags = this.parseTags(this.settings.memoryTags);
     if (this.settings.includeCategoryTag && memory.category) {
       const categoryTag = memory.category.toLowerCase().replace(/\s+/g, "-");
@@ -388,14 +570,45 @@ ${this.settings.dailyNoteSectionHeader}
         }
       }
     }
-    if (tags.length > 0) {
-      frontmatter.tags = tags;
-    }
-    let content = this.generateFrontmatter(frontmatter);
     const contentLines = memory.content.split("\n");
     const firstLine = contentLines[0].substring(0, 60);
     const title = firstLine.length > 50 ? firstLine.substring(0, 50) + "..." : firstLine;
     const emoji = this.getCategoryEmoji(memory.category);
+    if (this.settings.enableTemplateCustomization) {
+      const templateData = {
+        id: memory.id,
+        type: "omi-memory",
+        synced: (/* @__PURE__ */ new Date()).toISOString(),
+        syncedFormatted: (/* @__PURE__ */ new Date()).toLocaleString(),
+        created: memory.created_at || "",
+        updated: memory.updated_at || "",
+        category: memory.category || "",
+        visibility: memory.visibility || "",
+        tags,
+        content: memory.content,
+        title,
+        emoji,
+        manually_added: memory.manually_added || false
+      };
+      return TemplateEngine.render(this.settings.memoryTemplate, templateData);
+    }
+    const frontmatter = {
+      id: memory.id,
+      type: "omi-memory",
+      synced: (/* @__PURE__ */ new Date()).toISOString()
+    };
+    if (memory.created_at)
+      frontmatter.created = memory.created_at;
+    if (memory.updated_at)
+      frontmatter.updated = memory.updated_at;
+    if (memory.category)
+      frontmatter.category = memory.category;
+    if (memory.visibility)
+      frontmatter.visibility = memory.visibility;
+    if (tags.length > 0) {
+      frontmatter.tags = tags;
+    }
+    let content = this.generateFrontmatter(frontmatter);
     content += `# ${emoji} ${title}
 
 `;
@@ -440,7 +653,62 @@ ${memory.content}
     return emojiMap[category.toLowerCase()] || "\u{1F9E0}";
   }
   generateConversationContent(conversation) {
-    var _a, _b, _c, _d, _e, _f, _g, _h;
+    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j;
+    const tags = this.parseTags(this.settings.conversationTags);
+    if (this.settings.includeCategoryTag && ((_a = conversation.structured) == null ? void 0 : _a.category)) {
+      const categoryTag = conversation.structured.category.toLowerCase().replace(/\s+/g, "-");
+      if (!tags.includes(categoryTag)) {
+        tags.push(categoryTag);
+      }
+    }
+    const title = ((_b = conversation.structured) == null ? void 0 : _b.title) || this.generateConversationTitle(conversation);
+    const emoji = ((_c = conversation.structured) == null ? void 0 : _c.emoji) || "\u{1F4AC}";
+    let duration = 0;
+    if (conversation.started_at && conversation.finished_at) {
+      const start = new Date(conversation.started_at);
+      const end = new Date(conversation.finished_at);
+      const durationMs = end.getTime() - start.getTime();
+      duration = Math.round(durationMs / 6e4);
+    }
+    const actionItems = ((_e = (_d = conversation.structured) == null ? void 0 : _d.action_items) == null ? void 0 : _e.map((item) => ({
+      description: item.description,
+      completed: item.completed || false,
+      checkbox: item.completed ? "[x]" : "[ ]"
+    }))) || [];
+    const events = ((_f = conversation.structured) == null ? void 0 : _f.events) || [];
+    let transcript = "";
+    if (conversation.transcript_segments && conversation.transcript_segments.length > 0) {
+      transcript = conversation.transcript_segments.map((segment) => {
+        var _a2;
+        const speaker = segment.is_user ? "**You**" : segment.speaker || `Speaker ${(_a2 = segment.speaker_id) != null ? _a2 : ""}`;
+        return `> ${speaker}: ${segment.text}
+>`;
+      }).join("\n");
+    }
+    if (this.settings.enableTemplateCustomization) {
+      const templateData = {
+        id: conversation.id,
+        type: "omi-conversation",
+        created: conversation.created_at,
+        source: conversation.source || "unknown",
+        synced: (/* @__PURE__ */ new Date()).toISOString(),
+        syncedFormatted: (/* @__PURE__ */ new Date()).toLocaleString(),
+        started: conversation.started_at || "",
+        finished: conversation.finished_at || "",
+        language: conversation.language || "",
+        category: ((_g = conversation.structured) == null ? void 0 : _g.category) || "",
+        tags,
+        title,
+        emoji,
+        duration: duration > 0 ? duration : null,
+        overview: ((_h = conversation.structured) == null ? void 0 : _h.overview) || "",
+        actionItems,
+        events,
+        transcript,
+        includeTranscript: this.settings.includeTranscript
+      };
+      return TemplateEngine.render(this.settings.conversationTemplate, templateData);
+    }
     const frontmatter = {
       id: conversation.id,
       type: "omi-conversation",
@@ -454,56 +722,42 @@ ${memory.content}
       frontmatter.finished = conversation.finished_at;
     if (conversation.language)
       frontmatter.language = conversation.language;
-    if ((_a = conversation.structured) == null ? void 0 : _a.category)
+    if ((_i = conversation.structured) == null ? void 0 : _i.category)
       frontmatter.category = conversation.structured.category;
-    const tags = this.parseTags(this.settings.conversationTags);
-    if (this.settings.includeCategoryTag && ((_b = conversation.structured) == null ? void 0 : _b.category)) {
-      const categoryTag = conversation.structured.category.toLowerCase().replace(/\s+/g, "-");
-      if (!tags.includes(categoryTag)) {
-        tags.push(categoryTag);
-      }
-    }
     if (tags.length > 0) {
       frontmatter.tags = tags;
     }
     let content = this.generateFrontmatter(frontmatter);
-    const title = ((_c = conversation.structured) == null ? void 0 : _c.title) || this.generateConversationTitle(conversation);
-    const emoji = ((_d = conversation.structured) == null ? void 0 : _d.emoji) || "\u{1F4AC}";
     content += `# ${emoji} ${title}
 
 `;
-    if (conversation.started_at && conversation.finished_at) {
-      const start = new Date(conversation.started_at);
-      const end = new Date(conversation.finished_at);
-      const durationMs = end.getTime() - start.getTime();
-      const durationMins = Math.round(durationMs / 6e4);
-      content += `**Duration:** ${durationMins} minutes
+    if (duration > 0) {
+      content += `**Duration:** ${duration} minutes
 
 `;
     }
-    if ((_e = conversation.structured) == null ? void 0 : _e.overview) {
+    if ((_j = conversation.structured) == null ? void 0 : _j.overview) {
       content += `## Overview
 
 ${conversation.structured.overview}
 
 `;
     }
-    if (((_f = conversation.structured) == null ? void 0 : _f.action_items) && conversation.structured.action_items.length > 0) {
+    if (actionItems.length > 0) {
       content += `## Action Items
 
 `;
-      for (const item of conversation.structured.action_items) {
-        const checkbox = item.completed ? "[x]" : "[ ]";
-        content += `- ${checkbox} ${item.description}
+      for (const item of actionItems) {
+        content += `- ${item.checkbox} ${item.description}
 `;
       }
       content += "\n";
     }
-    if (((_g = conversation.structured) == null ? void 0 : _g.events) && conversation.structured.events.length > 0) {
+    if (events.length > 0) {
       content += `## Events
 
 `;
-      for (const event of conversation.structured.events) {
+      for (const event of events) {
         content += `### ${event.title}
 `;
         if (event.description)
@@ -519,17 +773,12 @@ ${conversation.structured.overview}
       }
     }
     if (this.settings.includeTranscript) {
-      if (conversation.transcript_segments && conversation.transcript_segments.length > 0) {
+      if (transcript) {
         content += `## Transcript
 
+${transcript}
+
 `;
-        for (const segment of conversation.transcript_segments) {
-          const speaker = segment.is_user ? "**You**" : segment.speaker || `Speaker ${(_h = segment.speaker_id) != null ? _h : ""}`;
-          content += `> ${speaker}: ${segment.text}
->
-`;
-        }
-        content += "\n";
       } else {
         content += `## Transcript
 
@@ -549,6 +798,47 @@ ${conversation.structured.overview}
     return `Conversation - ${date.toLocaleDateString()} ${date.toLocaleTimeString()}`;
   }
   generateActionItemContent(actionItem) {
+    const tags = this.parseTags(this.settings.actionItemTags);
+    if (actionItem.completed) {
+      const completedTags = this.parseTags(this.settings.actionItemCompletedTags);
+      tags.push(...completedTags.filter((t) => !tags.includes(t)));
+    } else {
+      const pendingTags = this.parseTags(this.settings.actionItemPendingTags);
+      tags.push(...pendingTags.filter((t) => !tags.includes(t)));
+    }
+    let memoryLink = "";
+    let conversationLink = "";
+    if (actionItem.memory_id) {
+      const memoryFileName = this.sanitizeFileName(`memory-${actionItem.memory_id}`);
+      memoryLink = `[[${this.settings.memoriesFolder}/${memoryFileName}]]`;
+    }
+    if (actionItem.conversation_id) {
+      const convFileName = this.sanitizeFileName(`conversation-${actionItem.conversation_id}`);
+      conversationLink = `[[${this.settings.conversationsFolder}/${convFileName}]]`;
+    }
+    if (this.settings.enableTemplateCustomization) {
+      const templateData = {
+        id: actionItem.id,
+        type: "omi-action-item",
+        created: actionItem.created_at,
+        createdFormatted: new Date(actionItem.created_at).toLocaleString(),
+        completed: actionItem.completed || false,
+        source: actionItem.source || "unknown",
+        synced: (/* @__PURE__ */ new Date()).toISOString(),
+        syncedFormatted: (/* @__PURE__ */ new Date()).toLocaleString(),
+        completed_at: actionItem.completed_at || "",
+        completedFormatted: actionItem.completed_at ? new Date(actionItem.completed_at).toLocaleString() : "",
+        memory_id: actionItem.memory_id || "",
+        conversation_id: actionItem.conversation_id || "",
+        tags,
+        description: actionItem.description,
+        statusEmoji: actionItem.completed ? "\u2705" : "\u2B1C",
+        checkbox: actionItem.completed ? "[x]" : "[ ]",
+        memoryLink,
+        conversationLink
+      };
+      return TemplateEngine.render(this.settings.actionItemTemplate, templateData);
+    }
     const frontmatter = {
       id: actionItem.id,
       type: "omi-action-item",
@@ -563,14 +853,6 @@ ${conversation.structured.overview}
       frontmatter.memory_id = actionItem.memory_id;
     if (actionItem.conversation_id)
       frontmatter.conversation_id = actionItem.conversation_id;
-    const tags = this.parseTags(this.settings.actionItemTags);
-    if (actionItem.completed) {
-      const completedTags = this.parseTags(this.settings.actionItemCompletedTags);
-      tags.push(...completedTags.filter((t) => !tags.includes(t)));
-    } else {
-      const pendingTags = this.parseTags(this.settings.actionItemPendingTags);
-      tags.push(...pendingTags.filter((t) => !tags.includes(t)));
-    }
     if (tags.length > 0) {
       frontmatter.tags = tags;
     }
@@ -592,14 +874,12 @@ ${conversation.structured.overview}
       content += `- **Completed:** ${new Date(actionItem.completed_at).toLocaleString()}
 `;
     }
-    if (actionItem.memory_id) {
-      const memoryFileName = this.sanitizeFileName(`memory-${actionItem.memory_id}`);
-      content += `- **Related Memory:** [[${this.settings.memoriesFolder}/${memoryFileName}]]
+    if (memoryLink) {
+      content += `- **Related Memory:** ${memoryLink}
 `;
     }
-    if (actionItem.conversation_id) {
-      const convFileName = this.sanitizeFileName(`conversation-${actionItem.conversation_id}`);
-      content += `- **Related Conversation:** [[${this.settings.conversationsFolder}/${convFileName}]]
+    if (conversationLink) {
+      content += `- **Related Conversation:** ${conversationLink}
 `;
     }
     content += "\n";
@@ -609,6 +889,125 @@ ${conversation.structured.overview}
 `;
     return content;
   }
+  // ============================================================================
+  // TaskNotes Integration - Content Generation
+  // ============================================================================
+  generateTaskNotesActionItemContent(actionItem) {
+    const status = actionItem.completed ? "done" : this.settings.taskNotesDefaultStatus;
+    const contexts = this.parseTags(this.settings.taskNotesContexts);
+    const fields = {
+      title: this.settings.taskNotesFieldTitle,
+      status: this.settings.taskNotesFieldStatus,
+      priority: this.settings.taskNotesFieldPriority,
+      due: this.settings.taskNotesFieldDue,
+      scheduled: this.settings.taskNotesFieldScheduled,
+      contexts: this.settings.taskNotesFieldContexts,
+      projects: this.settings.taskNotesFieldProjects,
+      tags: this.settings.taskNotesFieldTags,
+      completed: this.settings.taskNotesFieldCompleted
+    };
+    const frontmatter = {};
+    if (this.settings.taskNotesIdentificationMethod === "property") {
+      const propName = this.settings.taskNotesIdentificationPropertyName;
+      const propValue = this.settings.taskNotesIdentificationPropertyValue;
+      if (propName && propValue) {
+        frontmatter[propName] = propValue;
+      }
+    }
+    frontmatter[fields.title] = actionItem.description;
+    frontmatter[fields.status] = status;
+    frontmatter[fields.priority] = this.settings.taskNotesDefaultPriority;
+    frontmatter[fields.contexts] = contexts;
+    frontmatter[fields.projects] = [];
+    const tags = ["omi", "omi/action-item"];
+    if (this.settings.taskNotesIdentificationMethod === "tag") {
+      const identTag = this.settings.taskNotesIdentificationTag;
+      if (identTag && !tags.includes(identTag)) {
+        tags.unshift(identTag);
+      }
+    }
+    frontmatter[fields.tags] = tags;
+    if (actionItem.completed && actionItem.completed_at) {
+      frontmatter[fields.completed] = actionItem.completed_at.split("T")[0];
+    }
+    frontmatter["omi-id"] = actionItem.id;
+    frontmatter["omi-source"] = actionItem.source || "omi";
+    frontmatter["omi-created"] = actionItem.created_at;
+    if (actionItem.conversation_id) {
+      const convFileName = this.generateFileName(
+        { id: actionItem.conversation_id, created_at: actionItem.created_at },
+        "conversation"
+      );
+      frontmatter["omi-conversation"] = `[[${this.settings.conversationsFolder}/${convFileName}]]`;
+    }
+    if (actionItem.memory_id) {
+      frontmatter["omi-memory"] = actionItem.memory_id;
+    }
+    let content = this.generateTaskNotesFrontmatter(frontmatter);
+    content += `${actionItem.description}
+
+`;
+    content += `## Source
+
+`;
+    content += `This task was automatically synced from Omi on ${(/* @__PURE__ */ new Date()).toLocaleString()}.
+
+`;
+    if (actionItem.conversation_id) {
+      const convFileName = this.sanitizeFileName(`conversation-${actionItem.conversation_id}`);
+      content += `**Related Conversation:** [[${this.settings.conversationsFolder}/${convFileName}]]
+`;
+    }
+    if (actionItem.memory_id) {
+      const memoryFileName = this.sanitizeFileName(`memory-${actionItem.memory_id}`);
+      content += `**Related Memory:** [[${this.settings.memoriesFolder}/${memoryFileName}]]
+`;
+    }
+    return content;
+  }
+  generateTaskNotesFrontmatter(data) {
+    let frontmatter = "---\n";
+    for (const [key, value] of Object.entries(data)) {
+      if (Array.isArray(value)) {
+        if (value.length === 0) {
+          frontmatter += `${key}: []
+`;
+        } else {
+          frontmatter += `${key}:
+`;
+          for (const item of value) {
+            frontmatter += `  - "${item}"
+`;
+          }
+        }
+      } else if (typeof value === "string") {
+        if (value.includes(":") || value.includes("#") || value.includes("[") || value.includes("'") || value.includes('"')) {
+          frontmatter += `${key}: "${value.replace(/"/g, '\\"')}"
+`;
+        } else {
+          frontmatter += `${key}: "${value}"
+`;
+        }
+      } else if (typeof value === "boolean") {
+        frontmatter += `${key}: ${value}
+`;
+      } else if (typeof value === "number") {
+        frontmatter += `${key}: ${value}
+`;
+      } else if (value === null || value === void 0) {
+        frontmatter += `${key}: 
+`;
+      } else {
+        frontmatter += `${key}: ${JSON.stringify(value)}
+`;
+      }
+    }
+    frontmatter += "---\n\n";
+    return frontmatter;
+  }
+  // ============================================================================
+  // Shared Content Generation Utilities
+  // ============================================================================
   generateFrontmatter(data) {
     let frontmatter = "---\n";
     for (const [key, value] of Object.entries(data)) {
@@ -736,8 +1135,10 @@ ${conversation.structured.overview}
       for (const memory of filteredMemories) {
         if (!memory.content || memory.content.trim() === "")
           continue;
+        const folderPath = this.getFolderPath(this.settings.memoriesFolder, memory.category, "memory");
+        await this.ensureFolderExists(folderPath);
         const fileName = this.generateFileName(memory, "memory");
-        const filePath = (0, import_obsidian.normalizePath)(`${this.settings.memoriesFolder}/${fileName}.md`);
+        const filePath = (0, import_obsidian.normalizePath)(`${folderPath}/${fileName}.md`);
         const existingFile = this.app.vault.getAbstractFileByPath(filePath);
         const content = this.generateMemoryContent(memory);
         if (existingFile) {
@@ -766,6 +1167,7 @@ ${conversation.structured.overview}
     return count;
   }
   async syncConversationsWithItems(silent = false, forceFullSync = false) {
+    var _a;
     if (!this.settings.apiKey) {
       if (!silent)
         new import_obsidian.Notice("Omi Sync: Please configure your API key");
@@ -780,8 +1182,14 @@ ${conversation.structured.overview}
       for (const conversation of conversations) {
         if (conversation.discarded || conversation.deleted)
           continue;
+        const folderPath = this.getFolderPath(
+          this.settings.conversationsFolder,
+          (_a = conversation.structured) == null ? void 0 : _a.category,
+          "conversation"
+        );
+        await this.ensureFolderExists(folderPath);
         const fileName = this.generateFileName(conversation, "conversation");
-        const filePath = (0, import_obsidian.normalizePath)(`${this.settings.conversationsFolder}/${fileName}.md`);
+        const filePath = (0, import_obsidian.normalizePath)(`${folderPath}/${fileName}.md`);
         const existingFile = this.app.vault.getAbstractFileByPath(filePath);
         const content = this.generateConversationContent(conversation);
         if (existingFile) {
@@ -816,7 +1224,8 @@ ${conversation.structured.overview}
       return { count: 0, items: [] };
     }
     try {
-      await this.ensureFolderExists(this.settings.actionItemsFolder);
+      const targetFolder = this.settings.enableTaskNotesIntegration ? this.settings.taskNotesFolder : this.settings.actionItemsFolder;
+      await this.ensureFolderExists(targetFolder);
       const startDate = this.settings.enableIncrementalSync && !forceFullSync && this.settings.lastActionItemSyncTime ? this.settings.lastActionItemSyncTime : void 0;
       const actionItems = await this.fetchActionItems(100, 0, startDate);
       let syncedCount = 0;
@@ -824,10 +1233,12 @@ ${conversation.structured.overview}
       for (const actionItem of actionItems) {
         if (actionItem.deleted)
           continue;
+        const folderPath = this.getFolderPath(targetFolder, void 0, "action-item");
+        await this.ensureFolderExists(folderPath);
         const fileName = this.generateFileName(actionItem, "action-item");
-        const filePath = (0, import_obsidian.normalizePath)(`${this.settings.actionItemsFolder}/${fileName}.md`);
+        const filePath = (0, import_obsidian.normalizePath)(`${folderPath}/${fileName}.md`);
         const existingFile = this.app.vault.getAbstractFileByPath(filePath);
-        const content = this.generateActionItemContent(actionItem);
+        const content = this.settings.enableTaskNotesIntegration ? this.generateTaskNotesActionItemContent(actionItem) : this.generateActionItemContent(actionItem);
         if (existingFile) {
           await this.app.vault.modify(existingFile, content);
         } else {
@@ -839,7 +1250,8 @@ ${conversation.structured.overview}
       this.settings.lastActionItemSyncTime = (/* @__PURE__ */ new Date()).toISOString();
       await this.saveSettings();
       if (!silent) {
-        new import_obsidian.Notice(`Omi Sync: Synced ${syncedCount} action items`);
+        const format = this.settings.enableTaskNotesIntegration ? " (TaskNotes format)" : "";
+        new import_obsidian.Notice(`Omi Sync: Synced ${syncedCount} action items${format}`);
       }
       return { count: syncedCount, items: syncedItems };
     } catch (error) {
@@ -925,7 +1337,7 @@ var OmiSyncSettingTab = class extends import_obsidian.PluginSettingTab {
         await this.plugin.saveSettings();
       })
     );
-    new import_obsidian.Setting(containerEl).setName("Action Items Folder").setDesc("Where to save synced action items/tasks (relative to vault root)").addText(
+    new import_obsidian.Setting(containerEl).setName("Action Items Folder").setDesc("Where to save synced action items/tasks when NOT using TaskNotes integration").addText(
       (text) => text.setPlaceholder("Omi/Action Items").setValue(this.plugin.settings.actionItemsFolder).onChange(async (value) => {
         this.plugin.settings.actionItemsFolder = value || DEFAULT_SETTINGS.actionItemsFolder;
         await this.plugin.saveSettings();
@@ -990,7 +1402,7 @@ var OmiSyncSettingTab = class extends import_obsidian.PluginSettingTab {
         await this.plugin.saveSettings();
       })
     );
-    new import_obsidian.Setting(containerEl).setName("Action Item Tags").setDesc("Base tags to apply to all synced action items").addText(
+    new import_obsidian.Setting(containerEl).setName("Action Item Tags").setDesc("Base tags to apply to all synced action items (used when TaskNotes integration is disabled)").addText(
       (text) => text.setPlaceholder("omi, omi/action-item").setValue(this.plugin.settings.actionItemTags).onChange(async (value) => {
         this.plugin.settings.actionItemTags = value;
         await this.plugin.saveSettings();
@@ -1008,6 +1420,256 @@ var OmiSyncSettingTab = class extends import_obsidian.PluginSettingTab {
         await this.plugin.saveSettings();
       })
     );
+    containerEl.createEl("h2", { text: "TaskNotes Integration" });
+    containerEl.createEl("p", {
+      text: "Enable this to sync action items in TaskNotes format. Tasks will be created with YAML frontmatter compatible with the TaskNotes plugin.",
+      cls: "setting-item-description"
+    });
+    new import_obsidian.Setting(containerEl).setName("Enable TaskNotes Integration").setDesc("Create action items in TaskNotes-compatible format with YAML frontmatter").addToggle(
+      (toggle) => toggle.setValue(this.plugin.settings.enableTaskNotesIntegration).onChange(async (value) => {
+        this.plugin.settings.enableTaskNotesIntegration = value;
+        await this.plugin.saveSettings();
+        this.display();
+      })
+    );
+    if (this.plugin.settings.enableTaskNotesIntegration) {
+      new import_obsidian.Setting(containerEl).setName("TaskNotes Folder").setDesc("Folder where TaskNotes stores task files (this should match your TaskNotes configuration)").addText(
+        (text) => text.setPlaceholder("Tasks").setValue(this.plugin.settings.taskNotesFolder).onChange(async (value) => {
+          this.plugin.settings.taskNotesFolder = value || DEFAULT_SETTINGS.taskNotesFolder;
+          await this.plugin.saveSettings();
+        })
+      );
+      new import_obsidian.Setting(containerEl).setName("Default Status").setDesc("Default status for new tasks (should match a status defined in TaskNotes)").addDropdown(
+        (dropdown) => dropdown.addOption("open", "Open").addOption("in-progress", "In Progress").addOption("todo", "To Do").addOption("next", "Next").addOption("waiting", "Waiting").setValue(this.plugin.settings.taskNotesDefaultStatus).onChange(async (value) => {
+          this.plugin.settings.taskNotesDefaultStatus = value;
+          await this.plugin.saveSettings();
+        })
+      );
+      new import_obsidian.Setting(containerEl).setName("Default Priority").setDesc("Default priority for new tasks").addDropdown(
+        (dropdown) => dropdown.addOption("low", "Low").addOption("medium", "Medium").addOption("high", "High").addOption("urgent", "Urgent").setValue(this.plugin.settings.taskNotesDefaultPriority).onChange(async (value) => {
+          this.plugin.settings.taskNotesDefaultPriority = value;
+          await this.plugin.saveSettings();
+        })
+      );
+      new import_obsidian.Setting(containerEl).setName("Contexts").setDesc("Default contexts to apply to Omi tasks (comma-separated)").addText(
+        (text) => text.setPlaceholder("omi").setValue(this.plugin.settings.taskNotesContexts).onChange(async (value) => {
+          this.plugin.settings.taskNotesContexts = value;
+          await this.plugin.saveSettings();
+        })
+      );
+      containerEl.createEl("h3", { text: "Field Mappings" });
+      containerEl.createEl("p", {
+        text: "Configure these to match your TaskNotes Field Mapping settings. If you've customized property names in TaskNotes, enter the same names here.",
+        cls: "setting-item-description"
+      });
+      new import_obsidian.Setting(containerEl).setName("Title Field").setDesc("Property name for task title").addText(
+        (text) => text.setPlaceholder("title").setValue(this.plugin.settings.taskNotesFieldTitle).onChange(async (value) => {
+          this.plugin.settings.taskNotesFieldTitle = value || "title";
+          await this.plugin.saveSettings();
+        })
+      );
+      new import_obsidian.Setting(containerEl).setName("Status Field").setDesc("Property name for task status").addText(
+        (text) => text.setPlaceholder("status").setValue(this.plugin.settings.taskNotesFieldStatus).onChange(async (value) => {
+          this.plugin.settings.taskNotesFieldStatus = value || "status";
+          await this.plugin.saveSettings();
+        })
+      );
+      new import_obsidian.Setting(containerEl).setName("Priority Field").setDesc("Property name for task priority").addText(
+        (text) => text.setPlaceholder("priority").setValue(this.plugin.settings.taskNotesFieldPriority).onChange(async (value) => {
+          this.plugin.settings.taskNotesFieldPriority = value || "priority";
+          await this.plugin.saveSettings();
+        })
+      );
+      new import_obsidian.Setting(containerEl).setName("Due Date Field").setDesc("Property name for due date").addText(
+        (text) => text.setPlaceholder("due").setValue(this.plugin.settings.taskNotesFieldDue).onChange(async (value) => {
+          this.plugin.settings.taskNotesFieldDue = value || "due";
+          await this.plugin.saveSettings();
+        })
+      );
+      new import_obsidian.Setting(containerEl).setName("Scheduled Date Field").setDesc("Property name for scheduled date").addText(
+        (text) => text.setPlaceholder("scheduled").setValue(this.plugin.settings.taskNotesFieldScheduled).onChange(async (value) => {
+          this.plugin.settings.taskNotesFieldScheduled = value || "scheduled";
+          await this.plugin.saveSettings();
+        })
+      );
+      new import_obsidian.Setting(containerEl).setName("Contexts Field").setDesc("Property name for contexts").addText(
+        (text) => text.setPlaceholder("contexts").setValue(this.plugin.settings.taskNotesFieldContexts).onChange(async (value) => {
+          this.plugin.settings.taskNotesFieldContexts = value || "contexts";
+          await this.plugin.saveSettings();
+        })
+      );
+      new import_obsidian.Setting(containerEl).setName("Projects Field").setDesc("Property name for projects").addText(
+        (text) => text.setPlaceholder("projects").setValue(this.plugin.settings.taskNotesFieldProjects).onChange(async (value) => {
+          this.plugin.settings.taskNotesFieldProjects = value || "projects";
+          await this.plugin.saveSettings();
+        })
+      );
+      new import_obsidian.Setting(containerEl).setName("Tags Field").setDesc("Property name for tags").addText(
+        (text) => text.setPlaceholder("tags").setValue(this.plugin.settings.taskNotesFieldTags).onChange(async (value) => {
+          this.plugin.settings.taskNotesFieldTags = value || "tags";
+          await this.plugin.saveSettings();
+        })
+      );
+      new import_obsidian.Setting(containerEl).setName("Completed Date Field").setDesc("Property name for completion date").addText(
+        (text) => text.setPlaceholder("completed").setValue(this.plugin.settings.taskNotesFieldCompleted).onChange(async (value) => {
+          this.plugin.settings.taskNotesFieldCompleted = value || "completed";
+          await this.plugin.saveSettings();
+        })
+      );
+      containerEl.createEl("h3", { text: "Task Identification" });
+      containerEl.createEl("p", {
+        text: "Configure how TaskNotes identifies notes as tasks. This must match your TaskNotes 'Task Identification' settings.",
+        cls: "setting-item-description"
+      });
+      new import_obsidian.Setting(containerEl).setName("Identification Method").setDesc("How TaskNotes identifies which notes are tasks").addDropdown(
+        (dropdown) => dropdown.addOption("tag", "Tag-based (e.g., #task)").addOption("property", "Property-based (e.g., type: task)").setValue(this.plugin.settings.taskNotesIdentificationMethod).onChange(async (value) => {
+          this.plugin.settings.taskNotesIdentificationMethod = value;
+          await this.plugin.saveSettings();
+          this.display();
+        })
+      );
+      if (this.plugin.settings.taskNotesIdentificationMethod === "tag") {
+        new import_obsidian.Setting(containerEl).setName("Identification Tag").setDesc("Tag that marks a note as a task (without #)").addText(
+          (text) => text.setPlaceholder("task").setValue(this.plugin.settings.taskNotesIdentificationTag).onChange(async (value) => {
+            this.plugin.settings.taskNotesIdentificationTag = value || "task";
+            await this.plugin.saveSettings();
+          })
+        );
+      } else {
+        new import_obsidian.Setting(containerEl).setName("Identification Property Name").setDesc("Property name that identifies a task").addText(
+          (text) => text.setPlaceholder("type").setValue(this.plugin.settings.taskNotesIdentificationPropertyName).onChange(async (value) => {
+            this.plugin.settings.taskNotesIdentificationPropertyName = value || "type";
+            await this.plugin.saveSettings();
+          })
+        );
+        new import_obsidian.Setting(containerEl).setName("Identification Property Value").setDesc("Property value that identifies a task").addText(
+          (text) => text.setPlaceholder("task").setValue(this.plugin.settings.taskNotesIdentificationPropertyValue).onChange(async (value) => {
+            this.plugin.settings.taskNotesIdentificationPropertyValue = value || "task";
+            await this.plugin.saveSettings();
+          })
+        );
+      }
+      const infoDiv = containerEl.createDiv({ cls: "setting-item-description" });
+      infoDiv.createEl("p", {
+        text: "When enabled, action items will be created with TaskNotes YAML frontmatter using your configured field names. Omi-specific metadata (omi-id, omi-source, omi-conversation) will be preserved as custom fields."
+      });
+    }
+    containerEl.createEl("h2", { text: "Template Customization" });
+    containerEl.createEl("p", {
+      text: "Customize how synced items are formatted using Handlebars-like templates. Templates support {{variable}}, {{#if condition}}...{{/if}}, and {{#each array}}...{{/each}} syntax.",
+      cls: "setting-item-description"
+    });
+    new import_obsidian.Setting(containerEl).setName("Enable Template Customization").setDesc("Use custom templates instead of default formatting for synced items").addToggle(
+      (toggle) => toggle.setValue(this.plugin.settings.enableTemplateCustomization).onChange(async (value) => {
+        this.plugin.settings.enableTemplateCustomization = value;
+        await this.plugin.saveSettings();
+        this.display();
+      })
+    );
+    if (this.plugin.settings.enableTemplateCustomization) {
+      new import_obsidian.Setting(containerEl).setName("Memory Template").setDesc("Template for memory notes. Available variables: id, type, synced, syncedFormatted, created, updated, category, visibility, tags, content, title, emoji, manually_added").addTextArea((text) => {
+        text.setValue(this.plugin.settings.memoryTemplate).onChange(async (value) => {
+          this.plugin.settings.memoryTemplate = value;
+          await this.plugin.saveSettings();
+        });
+        text.inputEl.rows = 15;
+        text.inputEl.cols = 60;
+        text.inputEl.style.fontFamily = "monospace";
+        text.inputEl.style.fontSize = "12px";
+      });
+      new import_obsidian.Setting(containerEl).setName("Reset Memory Template").setDesc("Restore the default memory template").addButton(
+        (button) => button.setButtonText("Reset").onClick(async () => {
+          this.plugin.settings.memoryTemplate = DEFAULT_SETTINGS.memoryTemplate;
+          await this.plugin.saveSettings();
+          new import_obsidian.Notice("Memory template reset to default");
+          this.display();
+        })
+      );
+      new import_obsidian.Setting(containerEl).setName("Conversation Template").setDesc("Template for conversation notes. Available variables: id, type, created, source, synced, syncedFormatted, started, finished, language, category, tags, title, emoji, duration, overview, actionItems (array), events (array), transcript, includeTranscript").addTextArea((text) => {
+        text.setValue(this.plugin.settings.conversationTemplate).onChange(async (value) => {
+          this.plugin.settings.conversationTemplate = value;
+          await this.plugin.saveSettings();
+        });
+        text.inputEl.rows = 20;
+        text.inputEl.cols = 60;
+        text.inputEl.style.fontFamily = "monospace";
+        text.inputEl.style.fontSize = "12px";
+      });
+      new import_obsidian.Setting(containerEl).setName("Reset Conversation Template").setDesc("Restore the default conversation template").addButton(
+        (button) => button.setButtonText("Reset").onClick(async () => {
+          this.plugin.settings.conversationTemplate = DEFAULT_SETTINGS.conversationTemplate;
+          await this.plugin.saveSettings();
+          new import_obsidian.Notice("Conversation template reset to default");
+          this.display();
+        })
+      );
+      new import_obsidian.Setting(containerEl).setName("Action Item Template").setDesc("Template for action item notes. Available variables: id, type, created, createdFormatted, completed, source, synced, syncedFormatted, completed_at, completedFormatted, memory_id, conversation_id, tags, description, statusEmoji, checkbox, memoryLink, conversationLink").addTextArea((text) => {
+        text.setValue(this.plugin.settings.actionItemTemplate).onChange(async (value) => {
+          this.plugin.settings.actionItemTemplate = value;
+          await this.plugin.saveSettings();
+        });
+        text.inputEl.rows = 15;
+        text.inputEl.cols = 60;
+        text.inputEl.style.fontFamily = "monospace";
+        text.inputEl.style.fontSize = "12px";
+      });
+      new import_obsidian.Setting(containerEl).setName("Reset Action Item Template").setDesc("Restore the default action item template").addButton(
+        (button) => button.setButtonText("Reset").onClick(async () => {
+          this.plugin.settings.actionItemTemplate = DEFAULT_SETTINGS.actionItemTemplate;
+          await this.plugin.saveSettings();
+          new import_obsidian.Notice("Action item template reset to default");
+          this.display();
+        })
+      );
+      const templateInfoDiv = containerEl.createDiv({ cls: "setting-item-description" });
+      templateInfoDiv.createEl("p", { text: "Template Syntax:" });
+      const syntaxList = templateInfoDiv.createEl("ul");
+      syntaxList.createEl("li", { text: "{{variable}} - Insert variable value" });
+      syntaxList.createEl("li", { text: "{{#if variable}}...{{/if}} - Conditional block" });
+      syntaxList.createEl("li", { text: "{{#each array}}...{{/each}} - Loop through array items" });
+      templateInfoDiv.createEl("p", {
+        text: "Note: Templates do NOT affect TaskNotes-formatted action items. TaskNotes items always use the TaskNotes format."
+      });
+    }
+    containerEl.createEl("h2", { text: "Category-based Folders" });
+    containerEl.createEl("p", {
+      text: "Organize synced items into subfolders based on their category (e.g., Omi/Memories/Work/, Omi/Memories/Personal/).",
+      cls: "setting-item-description"
+    });
+    new import_obsidian.Setting(containerEl).setName("Enable Category-based Folders").setDesc("Organize items into category subfolders within their main folders").addToggle(
+      (toggle) => toggle.setValue(this.plugin.settings.enableCategoryFolders).onChange(async (value) => {
+        this.plugin.settings.enableCategoryFolders = value;
+        await this.plugin.saveSettings();
+        this.display();
+      })
+    );
+    if (this.plugin.settings.enableCategoryFolders) {
+      new import_obsidian.Setting(containerEl).setName("Use Categories for Memories").setDesc("Organize memories by category (e.g., Omi/Memories/Work/, Omi/Memories/Personal/)").addToggle(
+        (toggle) => toggle.setValue(this.plugin.settings.enableCategoryFoldersForMemories).onChange(async (value) => {
+          this.plugin.settings.enableCategoryFoldersForMemories = value;
+          await this.plugin.saveSettings();
+        })
+      );
+      new import_obsidian.Setting(containerEl).setName("Use Categories for Conversations").setDesc("Organize conversations by category (e.g., Omi/Conversations/Business/, Omi/Conversations/Casual/)").addToggle(
+        (toggle) => toggle.setValue(this.plugin.settings.enableCategoryFoldersForConversations).onChange(async (value) => {
+          this.plugin.settings.enableCategoryFoldersForConversations = value;
+          await this.plugin.saveSettings();
+        })
+      );
+      new import_obsidian.Setting(containerEl).setName("Use Categories for Action Items").setDesc("Organize action items by category (if category information is available)").addToggle(
+        (toggle) => toggle.setValue(this.plugin.settings.enableCategoryFoldersForActionItems).onChange(async (value) => {
+          this.plugin.settings.enableCategoryFoldersForActionItems = value;
+          await this.plugin.saveSettings();
+        })
+      );
+      const categoryInfoDiv = containerEl.createDiv({ cls: "setting-item-description" });
+      categoryInfoDiv.createEl("p", {
+        text: "When enabled, items will be organized into subfolders based on their category. For example, a memory with category 'Work' will be saved to 'Omi/Memories/Work/' instead of 'Omi/Memories/'."
+      });
+      categoryInfoDiv.createEl("p", {
+        text: "Note: Existing files will not be moved automatically. Category folders will be created for new syncs."
+      });
+    }
     containerEl.createEl("h2", { text: "Incremental Sync" });
     new import_obsidian.Setting(containerEl).setName("Enable Incremental Sync").setDesc("Only fetch items newer than the last sync time. Disable to always do a full sync.").addToggle(
       (toggle) => toggle.setValue(this.plugin.settings.enableIncrementalSync).onChange(async (value) => {
