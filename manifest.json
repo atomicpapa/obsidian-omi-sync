@@ -1,7 +1,7 @@
 {
 	"id": "omi-sync",
 	"name": "Omi Sync",
-	"version": "1.0.5",
+	"version": "1.0.6",
 	"minAppVersion": "1.0.0",
 	"description": "Sync your Omi conversations, memories, and action items to Obsidian as markdown notes.",
 	"author": "Glenn Morrison",
