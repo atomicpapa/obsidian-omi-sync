@@ -8,6 +8,8 @@ Sync your [Omi](https://omi.me) conversations, memories, and action items direct
 - 💬 **Sync Conversations** - Full conversation transcripts with AI summaries and speaker identification
 - ✅ **Sync Action Items** - Tasks and to-dos extracted from your conversations
 - 📁 **Custom Folders** - Configure separate folders for each type of content
+- 🗂️ **Category-based Folders** - Automatically organize items into category subfolders (e.g., Omi/Memories/Work/)
+- 🎨 **Template Customization** - Define your own Handlebars/Markdown templates for each item type
 - 🔄 **Auto-Sync** - Automatic background syncing at configurable intervals
 - ⚡ **Incremental Sync** - Only fetch new items since last sync for faster performance
 - 📅 **Daily Note Integration** - Automatically add today's Omi data to your daily note
@@ -257,6 +259,141 @@ If TaskNotes identifies tasks by `type: task`:
 - Property Name: `type`
 - Property Value: `task`
 
+## Template Customization
+
+Omi Sync allows you to fully customize how synced items are formatted using Handlebars-like templates. This gives you complete control over the structure and content of your synced notes.
+
+### Enabling Template Customization
+
+1. Open Obsidian Settings → Omi Sync
+2. Scroll to the **Template Customization** section
+3. Enable **Enable Template Customization**
+4. Edit the templates for memories, conversations, and action items
+
+### Template Syntax
+
+Templates support the following syntax:
+
+- `{{variable}}` - Insert a variable value
+- `{{#if variable}}...{{/if}}` - Conditional block (shows content only if variable exists and is truthy)
+- `{{#each array}}...{{/each}}` - Loop through array items
+
+### Available Variables
+
+#### Memory Template Variables
+- `id`, `type`, `synced`, `syncedFormatted`
+- `created`, `updated`, `category`, `visibility`
+- `tags` (array), `content`, `title`, `emoji`
+- `manually_added` (boolean)
+
+#### Conversation Template Variables
+- `id`, `type`, `created`, `source`, `synced`, `syncedFormatted`
+- `started`, `finished`, `language`, `category`
+- `tags` (array), `title`, `emoji`, `duration`
+- `overview`, `transcript`, `includeTranscript` (boolean)
+- `actionItems` (array with: `description`, `completed`, `checkbox`)
+- `events` (array with: `title`, `description`, `start`, `duration`)
+
+#### Action Item Template Variables
+- `id`, `type`, `created`, `createdFormatted`
+- `completed` (boolean), `source`, `synced`, `syncedFormatted`
+- `completed_at`, `completedFormatted`
+- `memory_id`, `conversation_id`, `tags` (array)
+- `description`, `statusEmoji`, `checkbox`
+- `memoryLink`, `conversationLink`
+
+### Example Templates
+
+#### Minimal Memory Template
+```handlebars
+---
+id: {{id}}
+type: omi-memory
+---
+
+# {{title}}
+
+{{content}}
+```
+
+#### Conversation with Selective Sections
+```handlebars
+---
+id: {{id}}
+type: omi-conversation
+tags: {{tags}}
+---
+
+# {{emoji}} {{title}}
+
+{{#if overview}}
+{{overview}}
+{{/if}}
+
+{{#if actionItems}}
+## Actions
+{{#each actionItems}}
+- {{checkbox}} {{description}}
+{{/each}}
+{{/if}}
+```
+
+### Resetting Templates
+
+Each template has a **Reset** button that restores the default template. Use this if you want to start over or if your template has errors.
+
+### Important Notes
+
+- Template customization does NOT affect TaskNotes-formatted action items
+- Templates are applied when items are synced; existing notes are not automatically updated
+- Invalid template syntax may result in malformed notes
+- Use the "Force Full Sync" command after changing templates to regenerate all notes
+
+## Category-based Folders
+
+Organize your synced items into category subfolders for better organization. For example:
+- `Omi/Memories/Work/`
+- `Omi/Memories/Personal/`
+- `Omi/Conversations/Business/`
+- `Omi/Conversations/Casual/`
+
+### Enabling Category-based Folders
+
+1. Open Obsidian Settings → Omi Sync
+2. Scroll to the **Category-based Folders** section
+3. Enable **Enable Category-based Folders**
+4. Choose which item types should use category folders:
+   - **Use Categories for Memories** - Organize memories by category
+   - **Use Categories for Conversations** - Organize conversations by category
+   - **Use Categories for Action Items** - Organize action items by category (if available)
+
+### How Categories Work
+
+- Categories come from Omi's AI categorization of your content
+- Common categories include: Work, Personal, Business, Health, Education, etc.
+- Items without categories are saved to the base folder
+- Category names are automatically sanitized for use in folder paths
+
+### Examples
+
+With category-based folders enabled:
+
+**Without categories:**
+- `Omi/Memories/2024-01-15 - Project update.md`
+- `Omi/Conversations/2024-01-15 - Team meeting.md`
+
+**With categories:**
+- `Omi/Memories/Work/2024-01-15 - Project update.md`
+- `Omi/Conversations/Business/2024-01-15 - Team meeting.md`
+- `Omi/Memories/Personal/2024-01-15 - Weekend plans.md`
+
+### Important Notes
+
+- Existing files are NOT moved when you enable this feature
+- Category-based folders apply to new syncs only
+- Use "Force Full Sync" to regenerate all notes with category folders
+- If a category changes in Omi, the file will be created in the new category folder on next sync
+
 ## Settings
 
 | Setting | Description | Default |
@@ -307,6 +444,16 @@ If TaskNotes identifies tasks by `type: task`:
 | Identification Tag | Tag that marks a note as a task | `task` |
 | Identification Property Name | Property name for identification | `type` |
 | Identification Property Value | Property value for identification | `task` |
+| **Template Customization** | | |
+| Enable Template Customization | Use custom templates for synced items | ❌ |
+| Memory Template | Handlebars template for memory notes | (default template) |
+| Conversation Template | Handlebars template for conversation notes | (default template) |
+| Action Item Template | Handlebars template for action item notes | (default template) |
+| **Category-based Folders** | | |
+| Enable Category-based Folders | Organize items into category subfolders | ❌ |
+| Use Categories for Memories | Apply category folders to memories | ✅ |
+| Use Categories for Conversations | Apply category folders to conversations | ✅ |
+| Use Categories for Action Items | Apply category folders to action items | ❌ |
 
 ## Commands
 
@@ -363,6 +510,36 @@ When using TaskNotes integration:
 - Use plugins like [Tasks](https://github.com/obsidian-tasks-group/obsidian-tasks) or [TaskNotes](https://github.com/callumalpass/tasknotes) for advanced task management
 - Action items are cross-linked to their source memories/conversations
 
+### Using Template Customization
+
+Template customization is powerful for adapting Omi Sync to your workflow:
+
+- **Minimalist templates**: Remove sections you don't use (e.g., if you never need transcripts)
+- **Add custom sections**: Include your own markdown sections in templates
+- **Match your vault style**: Adjust formatting to match your existing notes
+- **Dataview integration**: Add custom frontmatter fields for use with Dataview queries
+
+Example use cases:
+- Add a `reviewed: false` field to track which items you've processed
+- Include custom CSS classes for styling
+- Add links to related project notes
+- Create templates optimized for mobile viewing
+
+### Using Category-based Folders
+
+Category-based folders help keep your Omi content organized:
+
+- **Find related content**: All work-related items in one place
+- **Use folder notes**: Create index notes in category folders to summarize content
+- **Apply folder-specific templates**: Use the Templater plugin with folder-based templates
+- **Archive by category**: Easily move old categories to an archive folder
+
+Example workflows:
+- Keep a `Work/` folder for professional content and `Personal/` for everything else
+- Use categories to separate different projects or life areas
+- Create Dataview dashboards filtered by category folders
+- Set up different sync schedules for different categories (manual workflow)
+
 ## Troubleshooting
 
 ### "Invalid API key" Error
@@ -384,6 +561,20 @@ When using TaskNotes integration:
 - Check that Task Identification settings match your TaskNotes configuration
 - Ensure the TaskNotes Folder setting matches where TaskNotes expects tasks
 - Try a Force Full Sync to regenerate action items with the correct format
+
+### Template Errors or Malformed Notes
+- Check your template syntax for typos (e.g., unclosed `{{#if}}` blocks)
+- Ensure all `{{#if}}` blocks have matching `{{/if}}` tags
+- Ensure all `{{#each}}` blocks have matching `{{/each}}` tags
+- Use the Reset button to restore the default template if you're stuck
+- Test your template changes with a Force Full Sync on a small number of items first
+
+### Category Folders Not Created
+- Verify that Enable Category-based Folders is enabled
+- Check that the specific item type toggle is enabled (e.g., Use Categories for Memories)
+- Ensure items have category information (not all items may have categories)
+- Category folders are only created for new syncs, not for existing files
+- Try a Force Full Sync to regenerate all items with category folders
 
 ## Privacy & Security
 

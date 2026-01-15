@@ -70,6 +70,16 @@ interface OmiSyncSettings {
 	taskNotesIdentificationTag: string;
 	taskNotesIdentificationPropertyName: string;
 	taskNotesIdentificationPropertyValue: string;
+	// Template Customization settings
+	enableTemplateCustomization: boolean;
+	memoryTemplate: string;
+	conversationTemplate: string;
+	actionItemTemplate: string;
+	// Category-based Folders settings
+	enableCategoryFolders: boolean;
+	enableCategoryFoldersForMemories: boolean;
+	enableCategoryFoldersForConversations: boolean;
+	enableCategoryFoldersForActionItems: boolean;
 }
 
 const DEFAULT_SETTINGS: OmiSyncSettings = {
@@ -123,6 +133,104 @@ const DEFAULT_SETTINGS: OmiSyncSettings = {
 	taskNotesIdentificationTag: "task",
 	taskNotesIdentificationPropertyName: "type",
 	taskNotesIdentificationPropertyValue: "task",
+	// Template Customization defaults
+	enableTemplateCustomization: false,
+	memoryTemplate: `---
+id: {{id}}
+type: omi-memory
+synced: {{synced}}
+created: {{created}}
+updated: {{updated}}
+category: {{category}}
+visibility: {{visibility}}
+tags: {{tags}}
+---
+
+# {{emoji}} {{title}}
+
+## Memory
+
+{{content}}
+
+{{#if category}}**Category:** {{category}}{{/if}}
+{{#if manually_added}}**Manually Added:** Yes{{/if}}
+
+---
+*Synced from Omi on {{syncedFormatted}}*`,
+	conversationTemplate: `---
+id: {{id}}
+type: omi-conversation
+created: {{created}}
+source: {{source}}
+synced: {{synced}}
+started: {{started}}
+finished: {{finished}}
+language: {{language}}
+category: {{category}}
+tags: {{tags}}
+---
+
+# {{emoji}} {{title}}
+
+{{#if duration}}**Duration:** {{duration}} minutes{{/if}}
+
+{{#if overview}}## Overview
+
+{{overview}}{{/if}}
+
+{{#if actionItems}}## Action Items
+
+{{#each actionItems}}
+- {{checkbox}} {{description}}
+{{/each}}{{/if}}
+
+{{#if events}}## Events
+
+{{#each events}}
+### {{title}}
+{{#if description}}{{description}}{{/if}}
+{{#if start}}- **Start:** {{start}}{{/if}}
+{{#if duration}}- **Duration:** {{duration}} minutes{{/if}}
+{{/each}}{{/if}}
+
+{{#if includeTranscript}}{{#if transcript}}## Transcript
+
+{{transcript}}{{else}}## Transcript
+
+*No transcript available for this conversation.*{{/if}}{{/if}}
+
+---
+*Synced from Omi on {{syncedFormatted}}*`,
+	actionItemTemplate: `---
+id: {{id}}
+type: omi-action-item
+created: {{created}}
+completed: {{completed}}
+source: {{source}}
+completed_at: {{completed_at}}
+memory_id: {{memory_id}}
+conversation_id: {{conversation_id}}
+tags: {{tags}}
+---
+
+# {{statusEmoji}} Action Item
+
+- {{checkbox}} {{description}}
+
+## Details
+
+- **Created:** {{createdFormatted}}
+{{#if completedFormatted}}- **Completed:** {{completedFormatted}}{{/if}}
+{{#if memoryLink}}- **Related Memory:** {{memoryLink}}{{/if}}
+{{#if conversationLink}}- **Related Conversation:** {{conversationLink}}{{/if}}
+
+---
+*Synced from Omi on {{syncedFormatted}}*`,
+	// Category-based Folders defaults
+	enableCategoryFolders: false,
+	enableCategoryFoldersForMemories: true,
+	enableCategoryFoldersForConversations: true,
+	enableCategoryFoldersForActionItems: false,
 };
 
 // Omi API Response Types
@@ -203,6 +311,99 @@ interface SyncResult {
 	conversations: number;
 	actionItems: number;
 	errors: string[];
+}
+
+// ============================================================================
+// Template Engine
+// ============================================================================
+
+class TemplateEngine {
+	/**
+	 * Renders a template with the provided data context
+	 * Supports:
+	 * - {{variable}} - Simple variable substitution
+	 * - {{#if variable}}...{{/if}} - Conditional blocks
+	 * - {{#each array}}...{{/each}} - Array iteration
+	 */
+	static render(template: string, data: Record<string, any>): string {
+		let result = template;
+
+		// Process #each blocks first
+		result = this.processEach(result, data);
+
+		// Process #if blocks
+		result = this.processIf(result, data);
+
+		// Process simple variable substitution
+		result = this.processVariables(result, data);
+
+		// Clean up empty lines
+		result = this.cleanupEmptyLines(result);
+
+		return result;
+	}
+
+	private static processEach(template: string, data: Record<string, any>): string {
+		const eachRegex = /\{\{#each\s+(\w+)\}\}([\s\S]*?)\{\{\/each\}\}/g;
+
+		return template.replace(eachRegex, (match, arrayName, content) => {
+			const array = data[arrayName];
+			if (!Array.isArray(array) || array.length === 0) {
+				return '';
+			}
+
+			return array.map((item) => {
+				// Create a new context with array item properties
+				const itemContext = typeof item === 'object' ? { ...data, ...item } : { ...data, this: item };
+				return this.processVariables(content, itemContext);
+			}).join('');
+		});
+	}
+
+	private static processIf(template: string, data: Record<string, any>): string {
+		const ifRegex = /\{\{#if\s+(\w+)\}\}([\s\S]*?)\{\{\/if\}\}/g;
+
+		return template.replace(ifRegex, (match, condition, content) => {
+			const value = data[condition];
+			// Check if value is truthy (exists, not empty, not false)
+			const isTruthy = value !== undefined && value !== null && value !== false && value !== '';
+			return isTruthy ? content : '';
+		});
+	}
+
+	private static processVariables(template: string, data: Record<string, any>): string {
+		const varRegex = /\{\{(\w+)\}\}/g;
+
+		return template.replace(varRegex, (match, varName) => {
+			const value = data[varName];
+			if (value === undefined || value === null) {
+				return '';
+			}
+
+			// Handle arrays in frontmatter format
+			if (Array.isArray(value)) {
+				if (value.length === 0) {
+					return '[]';
+				}
+				return '\n' + value.map((item) => `  - ${item}`).join('\n');
+			}
+
+			return String(value);
+		});
+	}
+
+	private static cleanupEmptyLines(text: string): string {
+		// Remove lines that are only whitespace
+		return text.replace(/^\s*[\r\n]/gm, (match, offset, string) => {
+			// Keep one newline for paragraphs separation
+			const prevChar = string[offset - 1];
+			const nextChar = string[offset + match.length];
+			if (prevChar === '\n' || nextChar === '\n') {
+				return '';
+			}
+			return '\n';
+		});
+	}
 }
 
 // ============================================================================
@@ -407,6 +608,30 @@ export default class OmiSyncPlugin extends Plugin {
 		}
 	}
 
+	/**
+	 * Get the folder path for an item, optionally organizing by category
+	 */
+	private getFolderPath(baseFolder: string, category: string | undefined, itemType: 'memory' | 'conversation' | 'action-item'): string {
+		// Check if category-based folders are enabled globally and for this item type
+		const useCategoryFolders = this.settings.enableCategoryFolders && (
+			(itemType === 'memory' && this.settings.enableCategoryFoldersForMemories) ||
+			(itemType === 'conversation' && this.settings.enableCategoryFoldersForConversations) ||
+			(itemType === 'action-item' && this.settings.enableCategoryFoldersForActionItems)
+		);
+
+		if (!useCategoryFolders || !category) {
+			return baseFolder;
+		}
+
+		// Sanitize category name for use in folder path
+		const sanitizedCategory = category
+			.replace(/[\\/:*?"<>|]/g, '-')
+			.replace(/\s+/g, ' ')
+			.trim();
+
+		return `${baseFolder}/${sanitizedCategory}`;
+	}
+
 	// ============================================================================
 	// Daily Note Integration
 	// ============================================================================
@@ -590,20 +815,9 @@ export default class OmiSyncPlugin extends Plugin {
 	}
 
 	private generateMemoryContent(memory: OmiMemory): string {
-		const frontmatter: Record<string, unknown> = {
-			id: memory.id,
-			type: "omi-memory",
-			synced: new Date().toISOString(),
-		};
-
-		if (memory.created_at) frontmatter.created = memory.created_at;
-		if (memory.updated_at) frontmatter.updated = memory.updated_at;
-		if (memory.category) frontmatter.category = memory.category;
-		if (memory.visibility) frontmatter.visibility = memory.visibility;
-
 		// Use custom tags from settings
 		const tags: string[] = this.parseTags(this.settings.memoryTags);
-		
+
 		// Optionally add category as a tag
 		if (this.settings.includeCategoryTag && memory.category) {
 			const categoryTag = memory.category.toLowerCase().replace(/\s+/g, "-");
@@ -620,18 +834,52 @@ export default class OmiSyncPlugin extends Plugin {
 				}
 			}
 		}
-		
+
+		// Generate title from first line of content
+		const contentLines = memory.content.split("\n");
+		const firstLine = contentLines[0].substring(0, 60);
+		const title = firstLine.length > 50 ? firstLine.substring(0, 50) + "..." : firstLine;
+		const emoji = this.getCategoryEmoji(memory.category);
+
+		// If template customization is enabled, use template
+		if (this.settings.enableTemplateCustomization) {
+			const templateData = {
+				id: memory.id,
+				type: "omi-memory",
+				synced: new Date().toISOString(),
+				syncedFormatted: new Date().toLocaleString(),
+				created: memory.created_at || '',
+				updated: memory.updated_at || '',
+				category: memory.category || '',
+				visibility: memory.visibility || '',
+				tags: tags,
+				content: memory.content,
+				title: title,
+				emoji: emoji,
+				manually_added: memory.manually_added || false,
+			};
+
+			return TemplateEngine.render(this.settings.memoryTemplate, templateData);
+		}
+
+		// Otherwise, use default format
+		const frontmatter: Record<string, unknown> = {
+			id: memory.id,
+			type: "omi-memory",
+			synced: new Date().toISOString(),
+		};
+
+		if (memory.created_at) frontmatter.created = memory.created_at;
+		if (memory.updated_at) frontmatter.updated = memory.updated_at;
+		if (memory.category) frontmatter.category = memory.category;
+		if (memory.visibility) frontmatter.visibility = memory.visibility;
+
 		if (tags.length > 0) {
 			frontmatter.tags = tags;
 		}
 
 		let content = this.generateFrontmatter(frontmatter);
 
-		// Title - generate from first line of content or use category
-		const contentLines = memory.content.split("\n");
-		const firstLine = contentLines[0].substring(0, 60);
-		const title = firstLine.length > 50 ? firstLine.substring(0, 50) + "..." : firstLine;
-		const emoji = this.getCategoryEmoji(memory.category);
 		content += `# ${emoji} ${title}\n\n`;
 
 		// Main content
@@ -677,6 +925,77 @@ export default class OmiSyncPlugin extends Plugin {
 	}
 
 	private generateConversationContent(conversation: OmiConversation): string {
+		// Use custom tags from settings
+		const tags: string[] = this.parseTags(this.settings.conversationTags);
+
+		// Optionally add category as a tag
+		if (this.settings.includeCategoryTag && conversation.structured?.category) {
+			const categoryTag = conversation.structured.category.toLowerCase().replace(/\s+/g, "-");
+			if (!tags.includes(categoryTag)) {
+				tags.push(categoryTag);
+			}
+		}
+
+		// Title - use structured title if available
+		const title = conversation.structured?.title || this.generateConversationTitle(conversation);
+		const emoji = conversation.structured?.emoji || "💬";
+
+		// Calculate duration if available
+		let duration = 0;
+		if (conversation.started_at && conversation.finished_at) {
+			const start = new Date(conversation.started_at);
+			const end = new Date(conversation.finished_at);
+			const durationMs = end.getTime() - start.getTime();
+			duration = Math.round(durationMs / 60000);
+		}
+
+		// Format action items for template
+		const actionItems = conversation.structured?.action_items?.map(item => ({
+			description: item.description,
+			completed: item.completed || false,
+			checkbox: item.completed ? "[x]" : "[ ]",
+		})) || [];
+
+		// Format events for template
+		const events = conversation.structured?.events || [];
+
+		// Format transcript for template
+		let transcript = '';
+		if (conversation.transcript_segments && conversation.transcript_segments.length > 0) {
+			transcript = conversation.transcript_segments.map(segment => {
+				const speaker = segment.is_user ? "**You**" : segment.speaker || `Speaker ${segment.speaker_id ?? ""}`;
+				return `> ${speaker}: ${segment.text}\n>`;
+			}).join('\n');
+		}
+
+		// If template customization is enabled, use template
+		if (this.settings.enableTemplateCustomization) {
+			const templateData = {
+				id: conversation.id,
+				type: "omi-conversation",
+				created: conversation.created_at,
+				source: conversation.source || "unknown",
+				synced: new Date().toISOString(),
+				syncedFormatted: new Date().toLocaleString(),
+				started: conversation.started_at || '',
+				finished: conversation.finished_at || '',
+				language: conversation.language || '',
+				category: conversation.structured?.category || '',
+				tags: tags,
+				title: title,
+				emoji: emoji,
+				duration: duration > 0 ? duration : null,
+				overview: conversation.structured?.overview || '',
+				actionItems: actionItems,
+				events: events,
+				transcript: transcript,
+				includeTranscript: this.settings.includeTranscript,
+			};
+
+			return TemplateEngine.render(this.settings.conversationTemplate, templateData);
+		}
+
+		// Otherwise, use default format
 		const frontmatter: Record<string, unknown> = {
 			id: conversation.id,
 			type: "omi-conversation",
@@ -690,35 +1009,17 @@ export default class OmiSyncPlugin extends Plugin {
 		if (conversation.language) frontmatter.language = conversation.language;
 		if (conversation.structured?.category) frontmatter.category = conversation.structured.category;
 
-		// Use custom tags from settings
-		const tags: string[] = this.parseTags(this.settings.conversationTags);
-		
-		// Optionally add category as a tag
-		if (this.settings.includeCategoryTag && conversation.structured?.category) {
-			const categoryTag = conversation.structured.category.toLowerCase().replace(/\s+/g, "-");
-			if (!tags.includes(categoryTag)) {
-				tags.push(categoryTag);
-			}
-		}
-		
 		if (tags.length > 0) {
 			frontmatter.tags = tags;
 		}
 
 		let content = this.generateFrontmatter(frontmatter);
 
-		// Title - use structured title if available
-		const title = conversation.structured?.title || this.generateConversationTitle(conversation);
-		const emoji = conversation.structured?.emoji || "💬";
 		content += `# ${emoji} ${title}\n\n`;
 
 		// Duration if available
-		if (conversation.started_at && conversation.finished_at) {
-			const start = new Date(conversation.started_at);
-			const end = new Date(conversation.finished_at);
-			const durationMs = end.getTime() - start.getTime();
-			const durationMins = Math.round(durationMs / 60000);
-			content += `**Duration:** ${durationMins} minutes\n\n`;
+		if (duration > 0) {
+			content += `**Duration:** ${duration} minutes\n\n`;
 		}
 
 		// Overview
@@ -727,19 +1028,18 @@ export default class OmiSyncPlugin extends Plugin {
 		}
 
 		// Action Items from structured data
-		if (conversation.structured?.action_items && conversation.structured.action_items.length > 0) {
+		if (actionItems.length > 0) {
 			content += `## Action Items\n\n`;
-			for (const item of conversation.structured.action_items) {
-				const checkbox = item.completed ? "[x]" : "[ ]";
-				content += `- ${checkbox} ${item.description}\n`;
+			for (const item of actionItems) {
+				content += `- ${item.checkbox} ${item.description}\n`;
 			}
 			content += "\n";
 		}
 
 		// Events
-		if (conversation.structured?.events && conversation.structured.events.length > 0) {
+		if (events.length > 0) {
 			content += `## Events\n\n`;
-			for (const event of conversation.structured.events) {
+			for (const event of events) {
 				content += `### ${event.title}\n`;
 				if (event.description) content += `${event.description}\n`;
 				if (event.start) content += `- **Start:** ${event.start}\n`;
@@ -750,13 +1050,8 @@ export default class OmiSyncPlugin extends Plugin {
 
 		// Transcript
 		if (this.settings.includeTranscript) {
-			if (conversation.transcript_segments && conversation.transcript_segments.length > 0) {
-				content += `## Transcript\n\n`;
-				for (const segment of conversation.transcript_segments) {
-					const speaker = segment.is_user ? "**You**" : segment.speaker || `Speaker ${segment.speaker_id ?? ""}`;
-					content += `> ${speaker}: ${segment.text}\n>\n`;
-				}
-				content += "\n";
+			if (transcript) {
+				content += `## Transcript\n\n${transcript}\n\n`;
 			} else {
 				content += `## Transcript\n\n*No transcript available for this conversation.*\n\n`;
 			}
@@ -775,6 +1070,57 @@ export default class OmiSyncPlugin extends Plugin {
 	}
 
 	private generateActionItemContent(actionItem: OmiActionItem): string {
+		// Use custom tags from settings
+		const tags: string[] = this.parseTags(this.settings.actionItemTags);
+
+		// Add completed or pending tags based on status
+		if (actionItem.completed) {
+			const completedTags = this.parseTags(this.settings.actionItemCompletedTags);
+			tags.push(...completedTags.filter((t) => !tags.includes(t)));
+		} else {
+			const pendingTags = this.parseTags(this.settings.actionItemPendingTags);
+			tags.push(...pendingTags.filter((t) => !tags.includes(t)));
+		}
+
+		// Generate links to related content
+		let memoryLink = '';
+		let conversationLink = '';
+		if (actionItem.memory_id) {
+			const memoryFileName = this.sanitizeFileName(`memory-${actionItem.memory_id}`);
+			memoryLink = `[[${this.settings.memoriesFolder}/${memoryFileName}]]`;
+		}
+		if (actionItem.conversation_id) {
+			const convFileName = this.sanitizeFileName(`conversation-${actionItem.conversation_id}`);
+			conversationLink = `[[${this.settings.conversationsFolder}/${convFileName}]]`;
+		}
+
+		// If template customization is enabled, use template
+		if (this.settings.enableTemplateCustomization) {
+			const templateData = {
+				id: actionItem.id,
+				type: "omi-action-item",
+				created: actionItem.created_at,
+				createdFormatted: new Date(actionItem.created_at).toLocaleString(),
+				completed: actionItem.completed || false,
+				source: actionItem.source || "unknown",
+				synced: new Date().toISOString(),
+				syncedFormatted: new Date().toLocaleString(),
+				completed_at: actionItem.completed_at || '',
+				completedFormatted: actionItem.completed_at ? new Date(actionItem.completed_at).toLocaleString() : '',
+				memory_id: actionItem.memory_id || '',
+				conversation_id: actionItem.conversation_id || '',
+				tags: tags,
+				description: actionItem.description,
+				statusEmoji: actionItem.completed ? "✅" : "⬜",
+				checkbox: actionItem.completed ? "[x]" : "[ ]",
+				memoryLink: memoryLink,
+				conversationLink: conversationLink,
+			};
+
+			return TemplateEngine.render(this.settings.actionItemTemplate, templateData);
+		}
+
+		// Otherwise, use default format
 		const frontmatter: Record<string, unknown> = {
 			id: actionItem.id,
 			type: "omi-action-item",
@@ -788,18 +1134,6 @@ export default class OmiSyncPlugin extends Plugin {
 		if (actionItem.memory_id) frontmatter.memory_id = actionItem.memory_id;
 		if (actionItem.conversation_id) frontmatter.conversation_id = actionItem.conversation_id;
 
-		// Use custom tags from settings
-		const tags: string[] = this.parseTags(this.settings.actionItemTags);
-		
-		// Add completed or pending tags based on status
-		if (actionItem.completed) {
-			const completedTags = this.parseTags(this.settings.actionItemCompletedTags);
-			tags.push(...completedTags.filter((t) => !tags.includes(t)));
-		} else {
-			const pendingTags = this.parseTags(this.settings.actionItemPendingTags);
-			tags.push(...pendingTags.filter((t) => !tags.includes(t)));
-		}
-		
 		if (tags.length > 0) {
 			frontmatter.tags = tags;
 		}
@@ -822,13 +1156,11 @@ export default class OmiSyncPlugin extends Plugin {
 		}
 
 		// Links to related content
-		if (actionItem.memory_id) {
-			const memoryFileName = this.sanitizeFileName(`memory-${actionItem.memory_id}`);
-			content += `- **Related Memory:** [[${this.settings.memoriesFolder}/${memoryFileName}]]\n`;
+		if (memoryLink) {
+			content += `- **Related Memory:** ${memoryLink}\n`;
 		}
-		if (actionItem.conversation_id) {
-			const convFileName = this.sanitizeFileName(`conversation-${actionItem.conversation_id}`);
-			content += `- **Related Conversation:** [[${this.settings.conversationsFolder}/${convFileName}]]\n`;
+		if (conversationLink) {
+			content += `- **Related Conversation:** ${conversationLink}\n`;
 		}
 
 		content += "\n";
@@ -1147,8 +1479,12 @@ export default class OmiSyncPlugin extends Plugin {
 				// Skip empty memories
 				if (!memory.content || memory.content.trim() === "") continue;
 
+				// Get folder path (with optional category subfolder)
+				const folderPath = this.getFolderPath(this.settings.memoriesFolder, memory.category, 'memory');
+				await this.ensureFolderExists(folderPath);
+
 				const fileName = this.generateFileName(memory, "memory");
-				const filePath = normalizePath(`${this.settings.memoriesFolder}/${fileName}.md`);
+				const filePath = normalizePath(`${folderPath}/${fileName}.md`);
 
 				// Check if file already exists
 				const existingFile = this.app.vault.getAbstractFileByPath(filePath);
@@ -1211,8 +1547,16 @@ export default class OmiSyncPlugin extends Plugin {
 				// Skip discarded/deleted conversations
 				if (conversation.discarded || conversation.deleted) continue;
 
+				// Get folder path (with optional category subfolder)
+				const folderPath = this.getFolderPath(
+					this.settings.conversationsFolder,
+					conversation.structured?.category,
+					'conversation'
+				);
+				await this.ensureFolderExists(folderPath);
+
 				const fileName = this.generateFileName(conversation, "conversation");
-				const filePath = normalizePath(`${this.settings.conversationsFolder}/${fileName}.md`);
+				const filePath = normalizePath(`${folderPath}/${fileName}.md`);
 
 				const existingFile = this.app.vault.getAbstractFileByPath(filePath);
 				const content = this.generateConversationContent(conversation);
@@ -1275,11 +1619,15 @@ export default class OmiSyncPlugin extends Plugin {
 			for (const actionItem of actionItems) {
 				if (actionItem.deleted) continue;
 
+				// Get folder path (action items don't have categories, so pass undefined)
+				const folderPath = this.getFolderPath(targetFolder, undefined, 'action-item');
+				await this.ensureFolderExists(folderPath);
+
 				const fileName = this.generateFileName(actionItem, "action-item");
-				const filePath = normalizePath(`${targetFolder}/${fileName}.md`);
+				const filePath = normalizePath(`${folderPath}/${fileName}.md`);
 
 				const existingFile = this.app.vault.getAbstractFileByPath(filePath);
-				
+
 				// Generate content based on TaskNotes integration setting
 				const content = this.settings.enableTaskNotesIntegration
 					? this.generateTaskNotesActionItemContent(actionItem)
@@ -1880,6 +2228,192 @@ class OmiSyncSettingTab extends PluginSettingTab {
 			const infoDiv = containerEl.createDiv({ cls: "setting-item-description" });
 			infoDiv.createEl("p", { 
 				text: "When enabled, action items will be created with TaskNotes YAML frontmatter using your configured field names. Omi-specific metadata (omi-id, omi-source, omi-conversation) will be preserved as custom fields." 
+			});
+		}
+
+		// ============================================================================
+		// Template Customization Section
+		// ============================================================================
+
+		containerEl.createEl("h2", { text: "Template Customization" });
+
+		containerEl.createEl("p", {
+			text: "Customize how synced items are formatted using Handlebars-like templates. Templates support {{variable}}, {{#if condition}}...{{/if}}, and {{#each array}}...{{/each}} syntax.",
+			cls: "setting-item-description",
+		});
+
+		new Setting(containerEl)
+			.setName("Enable Template Customization")
+			.setDesc("Use custom templates instead of default formatting for synced items")
+			.addToggle((toggle) =>
+				toggle.setValue(this.plugin.settings.enableTemplateCustomization).onChange(async (value) => {
+					this.plugin.settings.enableTemplateCustomization = value;
+					await this.plugin.saveSettings();
+					// Refresh the settings display to show/hide template options
+					this.display();
+				})
+			);
+
+		// Only show template editors if customization is enabled
+		if (this.plugin.settings.enableTemplateCustomization) {
+			new Setting(containerEl)
+				.setName("Memory Template")
+				.setDesc("Template for memory notes. Available variables: id, type, synced, syncedFormatted, created, updated, category, visibility, tags, content, title, emoji, manually_added")
+				.addTextArea((text) => {
+					text
+						.setValue(this.plugin.settings.memoryTemplate)
+						.onChange(async (value) => {
+							this.plugin.settings.memoryTemplate = value;
+							await this.plugin.saveSettings();
+						});
+					text.inputEl.rows = 15;
+					text.inputEl.cols = 60;
+					text.inputEl.style.fontFamily = "monospace";
+					text.inputEl.style.fontSize = "12px";
+				});
+
+			new Setting(containerEl)
+				.setName("Reset Memory Template")
+				.setDesc("Restore the default memory template")
+				.addButton((button) =>
+					button.setButtonText("Reset").onClick(async () => {
+						this.plugin.settings.memoryTemplate = DEFAULT_SETTINGS.memoryTemplate;
+						await this.plugin.saveSettings();
+						new Notice("Memory template reset to default");
+						this.display();
+					})
+				);
+
+			new Setting(containerEl)
+				.setName("Conversation Template")
+				.setDesc("Template for conversation notes. Available variables: id, type, created, source, synced, syncedFormatted, started, finished, language, category, tags, title, emoji, duration, overview, actionItems (array), events (array), transcript, includeTranscript")
+				.addTextArea((text) => {
+					text
+						.setValue(this.plugin.settings.conversationTemplate)
+						.onChange(async (value) => {
+							this.plugin.settings.conversationTemplate = value;
+							await this.plugin.saveSettings();
+						});
+					text.inputEl.rows = 20;
+					text.inputEl.cols = 60;
+					text.inputEl.style.fontFamily = "monospace";
+					text.inputEl.style.fontSize = "12px";
+				});
+
+			new Setting(containerEl)
+				.setName("Reset Conversation Template")
+				.setDesc("Restore the default conversation template")
+				.addButton((button) =>
+					button.setButtonText("Reset").onClick(async () => {
+						this.plugin.settings.conversationTemplate = DEFAULT_SETTINGS.conversationTemplate;
+						await this.plugin.saveSettings();
+						new Notice("Conversation template reset to default");
+						this.display();
+					})
+				);
+
+			new Setting(containerEl)
+				.setName("Action Item Template")
+				.setDesc("Template for action item notes. Available variables: id, type, created, createdFormatted, completed, source, synced, syncedFormatted, completed_at, completedFormatted, memory_id, conversation_id, tags, description, statusEmoji, checkbox, memoryLink, conversationLink")
+				.addTextArea((text) => {
+					text
+						.setValue(this.plugin.settings.actionItemTemplate)
+						.onChange(async (value) => {
+							this.plugin.settings.actionItemTemplate = value;
+							await this.plugin.saveSettings();
+						});
+					text.inputEl.rows = 15;
+					text.inputEl.cols = 60;
+					text.inputEl.style.fontFamily = "monospace";
+					text.inputEl.style.fontSize = "12px";
+				});
+
+			new Setting(containerEl)
+				.setName("Reset Action Item Template")
+				.setDesc("Restore the default action item template")
+				.addButton((button) =>
+					button.setButtonText("Reset").onClick(async () => {
+						this.plugin.settings.actionItemTemplate = DEFAULT_SETTINGS.actionItemTemplate;
+						await this.plugin.saveSettings();
+						new Notice("Action item template reset to default");
+						this.display();
+					})
+				);
+
+			// Info box about template syntax
+			const templateInfoDiv = containerEl.createDiv({ cls: "setting-item-description" });
+			templateInfoDiv.createEl("p", { text: "Template Syntax:" });
+			const syntaxList = templateInfoDiv.createEl("ul");
+			syntaxList.createEl("li", { text: "{{variable}} - Insert variable value" });
+			syntaxList.createEl("li", { text: "{{#if variable}}...{{/if}} - Conditional block" });
+			syntaxList.createEl("li", { text: "{{#each array}}...{{/each}} - Loop through array items" });
+			templateInfoDiv.createEl("p", {
+				text: "Note: Templates do NOT affect TaskNotes-formatted action items. TaskNotes items always use the TaskNotes format."
+			});
+		}
+
+		// ============================================================================
+		// Category-based Folders Section
+		// ============================================================================
+
+		containerEl.createEl("h2", { text: "Category-based Folders" });
+
+		containerEl.createEl("p", {
+			text: "Organize synced items into subfolders based on their category (e.g., Omi/Memories/Work/, Omi/Memories/Personal/).",
+			cls: "setting-item-description",
+		});
+
+		new Setting(containerEl)
+			.setName("Enable Category-based Folders")
+			.setDesc("Organize items into category subfolders within their main folders")
+			.addToggle((toggle) =>
+				toggle.setValue(this.plugin.settings.enableCategoryFolders).onChange(async (value) => {
+					this.plugin.settings.enableCategoryFolders = value;
+					await this.plugin.saveSettings();
+					// Refresh the settings display to show/hide category options
+					this.display();
+				})
+			);
+
+		// Only show category folder options if feature is enabled
+		if (this.plugin.settings.enableCategoryFolders) {
+			new Setting(containerEl)
+				.setName("Use Categories for Memories")
+				.setDesc("Organize memories by category (e.g., Omi/Memories/Work/, Omi/Memories/Personal/)")
+				.addToggle((toggle) =>
+					toggle.setValue(this.plugin.settings.enableCategoryFoldersForMemories).onChange(async (value) => {
+						this.plugin.settings.enableCategoryFoldersForMemories = value;
+						await this.plugin.saveSettings();
+					})
+				);
+
+			new Setting(containerEl)
+				.setName("Use Categories for Conversations")
+				.setDesc("Organize conversations by category (e.g., Omi/Conversations/Business/, Omi/Conversations/Casual/)")
+				.addToggle((toggle) =>
+					toggle.setValue(this.plugin.settings.enableCategoryFoldersForConversations).onChange(async (value) => {
+						this.plugin.settings.enableCategoryFoldersForConversations = value;
+						await this.plugin.saveSettings();
+					})
+				);
+
+			new Setting(containerEl)
+				.setName("Use Categories for Action Items")
+				.setDesc("Organize action items by category (if category information is available)")
+				.addToggle((toggle) =>
+					toggle.setValue(this.plugin.settings.enableCategoryFoldersForActionItems).onChange(async (value) => {
+						this.plugin.settings.enableCategoryFoldersForActionItems = value;
+						await this.plugin.saveSettings();
+					})
+				);
+
+			// Info box about category folders
+			const categoryInfoDiv = containerEl.createDiv({ cls: "setting-item-description" });
+			categoryInfoDiv.createEl("p", {
+				text: "When enabled, items will be organized into subfolders based on their category. For example, a memory with category 'Work' will be saved to 'Omi/Memories/Work/' instead of 'Omi/Memories/'."
+			});
+			categoryInfoDiv.createEl("p", {
+				text: "Note: Existing files will not be moved automatically. Category folders will be created for new syncs."
 			});
 		}
 
