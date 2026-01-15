@@ -16,12 +16,21 @@ Sync your [Omi](https://omi.me) conversations, memories, and action items direct
 
 ## Installation
 
-### From Obsidian Community Plugins (Recommended)
+### From Obsidian Community Plugins (Coming Soon maybe)
 
 1. Open Obsidian Settings
 2. Go to **Community Plugins** and disable **Safe Mode**
 3. Click **Browse** and search for "Omi Sync"
 4. Install the plugin and enable it
+
+### BRAT Installation
+
+1. Install and Enable BRAT from the Community Store.
+2. Open BRAT Settings, scroll down to BETA Plugin List
+3. Click Add Beta Plugin
+4. Enter "https://github.com/atomicpapa/obsidian-omi-sync"
+5. Click Add plugin
+6. You can now back out and go to settings for Omi-Sync.      
 
 ### Manual Installation
 
