@@ -49,6 +49,27 @@ interface OmiSyncSettings {
 	dailyNoteIncludeConversations: boolean;
 	dailyNoteIncludeActionItems: boolean;
 	dailyNotePosition: "append" | "prepend";
+	// TaskNotes integration settings
+	enableTaskNotesIntegration: boolean;
+	taskNotesFolder: string;
+	taskNotesDefaultStatus: string;
+	taskNotesDefaultPriority: string;
+	taskNotesContexts: string;
+	// TaskNotes field mappings (to match user's TaskNotes configuration)
+	taskNotesFieldTitle: string;
+	taskNotesFieldStatus: string;
+	taskNotesFieldPriority: string;
+	taskNotesFieldDue: string;
+	taskNotesFieldScheduled: string;
+	taskNotesFieldContexts: string;
+	taskNotesFieldProjects: string;
+	taskNotesFieldTags: string;
+	taskNotesFieldCompleted: string;
+	// TaskNotes task identification settings
+	taskNotesIdentificationMethod: "tag" | "property";
+	taskNotesIdentificationTag: string;
+	taskNotesIdentificationPropertyName: string;
+	taskNotesIdentificationPropertyValue: string;
 }
 
 const DEFAULT_SETTINGS: OmiSyncSettings = {
@@ -81,6 +102,27 @@ const DEFAULT_SETTINGS: OmiSyncSettings = {
 	dailyNoteIncludeConversations: true,
 	dailyNoteIncludeActionItems: true,
 	dailyNotePosition: "append",
+	// TaskNotes integration defaults
+	enableTaskNotesIntegration: false,
+	taskNotesFolder: "Tasks",
+	taskNotesDefaultStatus: "open",
+	taskNotesDefaultPriority: "medium",
+	taskNotesContexts: "omi",
+	// TaskNotes field mapping defaults
+	taskNotesFieldTitle: "title",
+	taskNotesFieldStatus: "status",
+	taskNotesFieldPriority: "priority",
+	taskNotesFieldDue: "due",
+	taskNotesFieldScheduled: "scheduled",
+	taskNotesFieldContexts: "contexts",
+	taskNotesFieldProjects: "projects",
+	taskNotesFieldTags: "tags",
+	taskNotesFieldCompleted: "completed",
+	// TaskNotes task identification defaults
+	taskNotesIdentificationMethod: "tag",
+	taskNotesIdentificationTag: "task",
+	taskNotesIdentificationPropertyName: "type",
+	taskNotesIdentificationPropertyValue: "task",
 };
 
 // Omi API Response Types
@@ -487,8 +529,12 @@ export default class OmiSyncPlugin extends Plugin {
 			omiSection += `### Action Items (${todaysActionItems.length})\n\n`;
 			for (const item of todaysActionItems) {
 				const checkbox = item.completed ? "[x]" : "[ ]";
+				// Use appropriate folder based on TaskNotes integration
+				const folder = this.settings.enableTaskNotesIntegration 
+					? this.settings.taskNotesFolder 
+					: this.settings.actionItemsFolder;
 				const fileName = this.generateFileName(item, "action-item");
-				omiSection += `- ${checkbox} [[${this.settings.actionItemsFolder}/${fileName}|${item.description}]]\n`;
+				omiSection += `- ${checkbox} [[${folder}/${fileName}|${item.description}]]\n`;
 			}
 			omiSection += "\n";
 		}
@@ -794,6 +840,151 @@ export default class OmiSyncPlugin extends Plugin {
 		return content;
 	}
 
+	// ============================================================================
+	// TaskNotes Integration - Content Generation
+	// ============================================================================
+
+	private generateTaskNotesActionItemContent(actionItem: OmiActionItem): string {
+		// Determine status based on completion
+		const status = actionItem.completed 
+			? "done" 
+			: this.settings.taskNotesDefaultStatus;
+
+		// Parse contexts from settings
+		const contexts = this.parseTags(this.settings.taskNotesContexts);
+
+		// Get field mappings from settings
+		const fields = {
+			title: this.settings.taskNotesFieldTitle,
+			status: this.settings.taskNotesFieldStatus,
+			priority: this.settings.taskNotesFieldPriority,
+			due: this.settings.taskNotesFieldDue,
+			scheduled: this.settings.taskNotesFieldScheduled,
+			contexts: this.settings.taskNotesFieldContexts,
+			projects: this.settings.taskNotesFieldProjects,
+			tags: this.settings.taskNotesFieldTags,
+			completed: this.settings.taskNotesFieldCompleted,
+		};
+
+		// Build the frontmatter object in TaskNotes format using mapped field names
+		const frontmatter: Record<string, unknown> = {};
+		
+		// Handle task identification based on user's chosen method
+		if (this.settings.taskNotesIdentificationMethod === "property") {
+			// Property-based identification: add the property name and value
+			const propName = this.settings.taskNotesIdentificationPropertyName;
+			const propValue = this.settings.taskNotesIdentificationPropertyValue;
+			if (propName && propValue) {
+				frontmatter[propName] = propValue;
+			}
+		}
+		
+		// Core TaskNotes fields
+		frontmatter[fields.title] = actionItem.description;
+		frontmatter[fields.status] = status;
+		frontmatter[fields.priority] = this.settings.taskNotesDefaultPriority;
+		frontmatter[fields.contexts] = contexts;
+		frontmatter[fields.projects] = [] as string[];
+		
+		// Build tags array
+		const tags: string[] = ["omi", "omi/action-item"];
+		
+		// If using tag-based identification, add the identification tag
+		if (this.settings.taskNotesIdentificationMethod === "tag") {
+			const identTag = this.settings.taskNotesIdentificationTag;
+			if (identTag && !tags.includes(identTag)) {
+				tags.unshift(identTag); // Add at beginning so it's the first tag
+			}
+		}
+		
+		frontmatter[fields.tags] = tags;
+
+		// Add completion date if completed
+		if (actionItem.completed && actionItem.completed_at) {
+			frontmatter[fields.completed] = actionItem.completed_at.split("T")[0];
+		}
+
+		// Add Omi-specific metadata as custom fields
+		frontmatter["omi-id"] = actionItem.id;
+		frontmatter["omi-source"] = actionItem.source || "omi";
+		frontmatter["omi-created"] = actionItem.created_at;
+
+		// Link to related conversation if available
+		if (actionItem.conversation_id) {
+			const convFileName = this.generateFileName(
+				{ id: actionItem.conversation_id, created_at: actionItem.created_at } as OmiActionItem,
+				"conversation"
+			);
+			frontmatter["omi-conversation"] = `[[${this.settings.conversationsFolder}/${convFileName}]]`;
+		}
+
+		// Link to related memory if available
+		if (actionItem.memory_id) {
+			frontmatter["omi-memory"] = actionItem.memory_id;
+		}
+
+		// Generate the YAML frontmatter
+		let content = this.generateTaskNotesFrontmatter(frontmatter);
+
+		// Add the task description as the note body
+		content += `${actionItem.description}\n\n`;
+
+		// Add metadata section
+		content += `## Source\n\n`;
+		content += `This task was automatically synced from Omi on ${new Date().toLocaleString()}.\n\n`;
+
+		// Add links to related content
+		if (actionItem.conversation_id) {
+			const convFileName = this.sanitizeFileName(`conversation-${actionItem.conversation_id}`);
+			content += `**Related Conversation:** [[${this.settings.conversationsFolder}/${convFileName}]]\n`;
+		}
+		if (actionItem.memory_id) {
+			const memoryFileName = this.sanitizeFileName(`memory-${actionItem.memory_id}`);
+			content += `**Related Memory:** [[${this.settings.memoriesFolder}/${memoryFileName}]]\n`;
+		}
+
+		return content;
+	}
+
+	private generateTaskNotesFrontmatter(data: Record<string, unknown>): string {
+		let frontmatter = "---\n";
+		
+		for (const [key, value] of Object.entries(data)) {
+			if (Array.isArray(value)) {
+				if (value.length === 0) {
+					frontmatter += `${key}: []\n`;
+				} else {
+					frontmatter += `${key}:\n`;
+					for (const item of value) {
+						frontmatter += `  - "${item}"\n`;
+					}
+				}
+			} else if (typeof value === "string") {
+				// Quote strings that might contain special characters
+				if (value.includes(":") || value.includes("#") || value.includes("[") || value.includes("'") || value.includes('"')) {
+					frontmatter += `${key}: "${value.replace(/"/g, '\\"')}"\n`;
+				} else {
+					frontmatter += `${key}: "${value}"\n`;
+				}
+			} else if (typeof value === "boolean") {
+				frontmatter += `${key}: ${value}\n`;
+			} else if (typeof value === "number") {
+				frontmatter += `${key}: ${value}\n`;
+			} else if (value === null || value === undefined) {
+				frontmatter += `${key}: \n`;
+			} else {
+				frontmatter += `${key}: ${JSON.stringify(value)}\n`;
+			}
+		}
+		
+		frontmatter += "---\n\n";
+		return frontmatter;
+	}
+
+	// ============================================================================
+	// Shared Content Generation Utilities
+	// ============================================================================
+
 	private generateFrontmatter(data: Record<string, unknown>): string {
 		let frontmatter = "---\n";
 		for (const [key, value] of Object.entries(data)) {
@@ -1065,7 +1256,12 @@ export default class OmiSyncPlugin extends Plugin {
 		}
 
 		try {
-			await this.ensureFolderExists(this.settings.actionItemsFolder);
+			// Determine which folder to use based on TaskNotes integration setting
+			const targetFolder = this.settings.enableTaskNotesIntegration
+				? this.settings.taskNotesFolder
+				: this.settings.actionItemsFolder;
+
+			await this.ensureFolderExists(targetFolder);
 
 			// Use incremental sync if enabled
 			const startDate = this.settings.enableIncrementalSync && !forceFullSync && this.settings.lastActionItemSyncTime
@@ -1080,10 +1276,14 @@ export default class OmiSyncPlugin extends Plugin {
 				if (actionItem.deleted) continue;
 
 				const fileName = this.generateFileName(actionItem, "action-item");
-				const filePath = normalizePath(`${this.settings.actionItemsFolder}/${fileName}.md`);
+				const filePath = normalizePath(`${targetFolder}/${fileName}.md`);
 
 				const existingFile = this.app.vault.getAbstractFileByPath(filePath);
-				const content = this.generateActionItemContent(actionItem);
+				
+				// Generate content based on TaskNotes integration setting
+				const content = this.settings.enableTaskNotesIntegration
+					? this.generateTaskNotesActionItemContent(actionItem)
+					: this.generateActionItemContent(actionItem);
 
 				if (existingFile) {
 					await this.app.vault.modify(existingFile as any, content);
@@ -1100,7 +1300,8 @@ export default class OmiSyncPlugin extends Plugin {
 			await this.saveSettings();
 
 			if (!silent) {
-				new Notice(`Omi Sync: Synced ${syncedCount} action items`);
+				const format = this.settings.enableTaskNotesIntegration ? " (TaskNotes format)" : "";
+				new Notice(`Omi Sync: Synced ${syncedCount} action items${format}`);
 			}
 
 			return { count: syncedCount, items: syncedItems };
@@ -1243,7 +1444,7 @@ class OmiSyncSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName("Action Items Folder")
-			.setDesc("Where to save synced action items/tasks (relative to vault root)")
+			.setDesc("Where to save synced action items/tasks when NOT using TaskNotes integration")
 			.addText((text) =>
 				text
 					.setPlaceholder("Omi/Action Items")
@@ -1363,7 +1564,7 @@ class OmiSyncSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName("Action Item Tags")
-			.setDesc("Base tags to apply to all synced action items")
+			.setDesc("Base tags to apply to all synced action items (used when TaskNotes integration is disabled)")
 			.addText((text) =>
 				text
 					.setPlaceholder("omi, omi/action-item")
@@ -1399,6 +1600,288 @@ class OmiSyncSettingTab extends PluginSettingTab {
 						await this.plugin.saveSettings();
 					})
 			);
+
+		// ============================================================================
+		// TaskNotes Integration Section
+		// ============================================================================
+		
+		containerEl.createEl("h2", { text: "TaskNotes Integration" });
+
+		containerEl.createEl("p", {
+			text: "Enable this to sync action items in TaskNotes format. Tasks will be created with YAML frontmatter compatible with the TaskNotes plugin.",
+			cls: "setting-item-description",
+		});
+
+		new Setting(containerEl)
+			.setName("Enable TaskNotes Integration")
+			.setDesc("Create action items in TaskNotes-compatible format with YAML frontmatter")
+			.addToggle((toggle) =>
+				toggle.setValue(this.plugin.settings.enableTaskNotesIntegration).onChange(async (value) => {
+					this.plugin.settings.enableTaskNotesIntegration = value;
+					await this.plugin.saveSettings();
+					// Refresh the settings display to show/hide TaskNotes options
+					this.display();
+				})
+			);
+
+		// Only show TaskNotes-specific settings if integration is enabled
+		if (this.plugin.settings.enableTaskNotesIntegration) {
+			new Setting(containerEl)
+				.setName("TaskNotes Folder")
+				.setDesc("Folder where TaskNotes stores task files (this should match your TaskNotes configuration)")
+				.addText((text) =>
+					text
+						.setPlaceholder("Tasks")
+						.setValue(this.plugin.settings.taskNotesFolder)
+						.onChange(async (value) => {
+							this.plugin.settings.taskNotesFolder = value || DEFAULT_SETTINGS.taskNotesFolder;
+							await this.plugin.saveSettings();
+						})
+				);
+
+			new Setting(containerEl)
+				.setName("Default Status")
+				.setDesc("Default status for new tasks (should match a status defined in TaskNotes)")
+				.addDropdown((dropdown) =>
+					dropdown
+						.addOption("open", "Open")
+						.addOption("in-progress", "In Progress")
+						.addOption("todo", "To Do")
+						.addOption("next", "Next")
+						.addOption("waiting", "Waiting")
+						.setValue(this.plugin.settings.taskNotesDefaultStatus)
+						.onChange(async (value) => {
+							this.plugin.settings.taskNotesDefaultStatus = value;
+							await this.plugin.saveSettings();
+						})
+				);
+
+			new Setting(containerEl)
+				.setName("Default Priority")
+				.setDesc("Default priority for new tasks")
+				.addDropdown((dropdown) =>
+					dropdown
+						.addOption("low", "Low")
+						.addOption("medium", "Medium")
+						.addOption("high", "High")
+						.addOption("urgent", "Urgent")
+						.setValue(this.plugin.settings.taskNotesDefaultPriority)
+						.onChange(async (value) => {
+							this.plugin.settings.taskNotesDefaultPriority = value;
+							await this.plugin.saveSettings();
+						})
+				);
+
+			new Setting(containerEl)
+				.setName("Contexts")
+				.setDesc("Default contexts to apply to Omi tasks (comma-separated)")
+				.addText((text) =>
+					text
+						.setPlaceholder("omi")
+						.setValue(this.plugin.settings.taskNotesContexts)
+						.onChange(async (value) => {
+							this.plugin.settings.taskNotesContexts = value;
+							await this.plugin.saveSettings();
+						})
+				);
+
+			// Field Mappings subsection
+			containerEl.createEl("h3", { text: "Field Mappings" });
+			
+			containerEl.createEl("p", {
+				text: "Configure these to match your TaskNotes Field Mapping settings. If you've customized property names in TaskNotes, enter the same names here.",
+				cls: "setting-item-description",
+			});
+
+			new Setting(containerEl)
+				.setName("Title Field")
+				.setDesc("Property name for task title")
+				.addText((text) =>
+					text
+						.setPlaceholder("title")
+						.setValue(this.plugin.settings.taskNotesFieldTitle)
+						.onChange(async (value) => {
+							this.plugin.settings.taskNotesFieldTitle = value || "title";
+							await this.plugin.saveSettings();
+						})
+				);
+
+			new Setting(containerEl)
+				.setName("Status Field")
+				.setDesc("Property name for task status")
+				.addText((text) =>
+					text
+						.setPlaceholder("status")
+						.setValue(this.plugin.settings.taskNotesFieldStatus)
+						.onChange(async (value) => {
+							this.plugin.settings.taskNotesFieldStatus = value || "status";
+							await this.plugin.saveSettings();
+						})
+				);
+
+			new Setting(containerEl)
+				.setName("Priority Field")
+				.setDesc("Property name for task priority")
+				.addText((text) =>
+					text
+						.setPlaceholder("priority")
+						.setValue(this.plugin.settings.taskNotesFieldPriority)
+						.onChange(async (value) => {
+							this.plugin.settings.taskNotesFieldPriority = value || "priority";
+							await this.plugin.saveSettings();
+						})
+				);
+
+			new Setting(containerEl)
+				.setName("Due Date Field")
+				.setDesc("Property name for due date")
+				.addText((text) =>
+					text
+						.setPlaceholder("due")
+						.setValue(this.plugin.settings.taskNotesFieldDue)
+						.onChange(async (value) => {
+							this.plugin.settings.taskNotesFieldDue = value || "due";
+							await this.plugin.saveSettings();
+						})
+				);
+
+			new Setting(containerEl)
+				.setName("Scheduled Date Field")
+				.setDesc("Property name for scheduled date")
+				.addText((text) =>
+					text
+						.setPlaceholder("scheduled")
+						.setValue(this.plugin.settings.taskNotesFieldScheduled)
+						.onChange(async (value) => {
+							this.plugin.settings.taskNotesFieldScheduled = value || "scheduled";
+							await this.plugin.saveSettings();
+						})
+				);
+
+			new Setting(containerEl)
+				.setName("Contexts Field")
+				.setDesc("Property name for contexts")
+				.addText((text) =>
+					text
+						.setPlaceholder("contexts")
+						.setValue(this.plugin.settings.taskNotesFieldContexts)
+						.onChange(async (value) => {
+							this.plugin.settings.taskNotesFieldContexts = value || "contexts";
+							await this.plugin.saveSettings();
+						})
+				);
+
+			new Setting(containerEl)
+				.setName("Projects Field")
+				.setDesc("Property name for projects")
+				.addText((text) =>
+					text
+						.setPlaceholder("projects")
+						.setValue(this.plugin.settings.taskNotesFieldProjects)
+						.onChange(async (value) => {
+							this.plugin.settings.taskNotesFieldProjects = value || "projects";
+							await this.plugin.saveSettings();
+						})
+				);
+
+			new Setting(containerEl)
+				.setName("Tags Field")
+				.setDesc("Property name for tags")
+				.addText((text) =>
+					text
+						.setPlaceholder("tags")
+						.setValue(this.plugin.settings.taskNotesFieldTags)
+						.onChange(async (value) => {
+							this.plugin.settings.taskNotesFieldTags = value || "tags";
+							await this.plugin.saveSettings();
+						})
+				);
+
+			new Setting(containerEl)
+				.setName("Completed Date Field")
+				.setDesc("Property name for completion date")
+				.addText((text) =>
+					text
+						.setPlaceholder("completed")
+						.setValue(this.plugin.settings.taskNotesFieldCompleted)
+						.onChange(async (value) => {
+							this.plugin.settings.taskNotesFieldCompleted = value || "completed";
+							await this.plugin.saveSettings();
+						})
+				);
+
+			// Task Identification subsection
+			containerEl.createEl("h3", { text: "Task Identification" });
+			
+			containerEl.createEl("p", {
+				text: "Configure how TaskNotes identifies notes as tasks. This must match your TaskNotes 'Task Identification' settings.",
+				cls: "setting-item-description",
+			});
+
+			new Setting(containerEl)
+				.setName("Identification Method")
+				.setDesc("How TaskNotes identifies which notes are tasks")
+				.addDropdown((dropdown) =>
+					dropdown
+						.addOption("tag", "Tag-based (e.g., #task)")
+						.addOption("property", "Property-based (e.g., type: task)")
+						.setValue(this.plugin.settings.taskNotesIdentificationMethod)
+						.onChange(async (value: "tag" | "property") => {
+							this.plugin.settings.taskNotesIdentificationMethod = value;
+							await this.plugin.saveSettings();
+							// Refresh display to show/hide relevant options
+							this.display();
+						})
+				);
+
+			// Show tag or property settings based on identification method
+			if (this.plugin.settings.taskNotesIdentificationMethod === "tag") {
+				new Setting(containerEl)
+					.setName("Identification Tag")
+					.setDesc("Tag that marks a note as a task (without #)")
+					.addText((text) =>
+						text
+							.setPlaceholder("task")
+							.setValue(this.plugin.settings.taskNotesIdentificationTag)
+							.onChange(async (value) => {
+								this.plugin.settings.taskNotesIdentificationTag = value || "task";
+								await this.plugin.saveSettings();
+							})
+					);
+			} else {
+				new Setting(containerEl)
+					.setName("Identification Property Name")
+					.setDesc("Property name that identifies a task")
+					.addText((text) =>
+						text
+							.setPlaceholder("type")
+							.setValue(this.plugin.settings.taskNotesIdentificationPropertyName)
+							.onChange(async (value) => {
+								this.plugin.settings.taskNotesIdentificationPropertyName = value || "type";
+								await this.plugin.saveSettings();
+							})
+					);
+
+				new Setting(containerEl)
+					.setName("Identification Property Value")
+					.setDesc("Property value that identifies a task")
+					.addText((text) =>
+						text
+							.setPlaceholder("task")
+							.setValue(this.plugin.settings.taskNotesIdentificationPropertyValue)
+							.onChange(async (value) => {
+								this.plugin.settings.taskNotesIdentificationPropertyValue = value || "task";
+								await this.plugin.saveSettings();
+							})
+					);
+			}
+
+			// Info box about TaskNotes format
+			const infoDiv = containerEl.createDiv({ cls: "setting-item-description" });
+			infoDiv.createEl("p", { 
+				text: "When enabled, action items will be created with TaskNotes YAML frontmatter using your configured field names. Omi-specific metadata (omi-id, omi-source, omi-conversation) will be preserved as custom fields." 
+			});
+		}
 
 		// Incremental Sync Section
 		containerEl.createEl("h2", { text: "Incremental Sync" });
