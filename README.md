@@ -1,4 +1,4 @@
-# THIS PLUGIN WAS 100% CODED BY **AI**.  I AM NOT A PROGRAMMER.  USE AT YOUR OWN RISK!!!!  YOU HAVE BEEN WARNED!!!
+# This plugin was 100% coded by Claude AI.  I am not a programmer.  You have been warned!  Use at your own risk!
 
 # Omi Sync for Obsidian
 
@@ -20,13 +20,6 @@ Sync your [Omi](https://omi.me) conversations, memories, and action items direct
 - 📋 **TaskNotes Integration** - Optional integration with the [TaskNotes](https://github.com/callumalpass/tasknotes) plugin for advanced task management
 
 ## Installation
-
-### From Obsidian Community Plugins (Coming Soon maybe)
-
-1. Open Obsidian Settings
-2. Go to **Community Plugins** and disable **Safe Mode**
-3. Click **Browse** and search for "Omi Sync"
-4. Install the plugin and enable it
 
 ### BRAT Installation
 
