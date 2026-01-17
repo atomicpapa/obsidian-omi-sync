@@ -1,3 +1,5 @@
+# THIS PLUGIN WAS 100% CODED BY **AI**.  I AM NOT A PROGRAMMER.  USE AT YOUR OWN RISK!!!!  YOU HAVE BEEN WARNED!!!
+
 # Omi Sync for Obsidian
 
 Sync your [Omi](https://omi.me) conversations, memories, and action items directly into your Obsidian vault as markdown notes.
